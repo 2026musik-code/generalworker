@@ -38,6 +38,50 @@ app.get('/api/cloudflare/account', async (c) => {
   return c.json(await response.json())
 })
 
+app.get('/api/cloudflare/workers/:name/content', async (c) => {
+  const accountId = c.req.header('X-CF-Account-ID')
+  const token = c.req.header('X-CF-Token')
+  const name = c.req.param('name')
+  if (!accountId || !token) return c.json({ error: 'Missing headers' }, 400)
+
+  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}/content`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  return new Response(response.body, { headers: { 'Content-Type': 'text/javascript' } })
+})
+
+app.put('/api/cloudflare/workers/:name/content', async (c) => {
+  const accountId = c.req.header('X-CF-Account-ID')
+  const token = c.req.header('X-CF-Token')
+  const name = c.req.param('name')
+  if (!accountId || !token) return c.json({ error: 'Missing headers' }, 400)
+
+  const content = await c.req.text()
+  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}`, {
+    method: 'PUT',
+    headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/javascript'
+    },
+    body: content
+  })
+  return c.json(await response.json())
+})
+
+app.post('/api/cloudflare/workers/:name/storage', async (c) => {
+  const name = c.req.param('name')
+  const content = await c.req.text()
+  await c.env.R2.put(`worker_src_${name}`, content)
+  return c.json({ success: true })
+})
+
+app.get('/api/cloudflare/workers/:name/storage', async (c) => {
+  const name = c.req.param('name')
+  const obj = await c.env.R2.get(`worker_src_${name}`)
+  if (!obj) return c.json({ error: 'Not found' }, 404)
+  return new Response(obj.body, { headers: { 'Content-Type': 'text/javascript' } })
+})
+
 app.get('/api/cloudflare/workers', async (c) => {
   const accountId = c.req.header('X-CF-Account-ID')
   const token = c.req.header('X-CF-Token')
@@ -229,6 +273,46 @@ app.get('/', (c) => {
             </main>
         </div>
 
+        <!-- Worker Editor Modal -->
+        <div id="modal-editor" class="hidden fixed inset-0 bg-black/80 backdrop-blur-lg z-50 flex flex-col p-4">
+            <div class="flex-grow flex flex-col glass rounded-3xl overflow-hidden shadow-2xl max-w-4xl mx-auto w-full">
+                <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-slate-900/50">
+                    <div class="flex flex-col">
+                        <span id="editor-worker-name" class="font-bold text-sm">Worker Name</span>
+                        <span class="text-[10px] text-slate-500 uppercase font-black tracking-widest">Editor</span>
+                    </div>
+                    <button onclick="toggleEditor()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+
+                <div class="flex-grow relative bg-slate-900/50">
+                    <textarea id="worker-code" class="absolute inset-0 w-full h-full bg-transparent p-6 font-mono text-xs focus:outline-none resize-none" spellcheck="false"></textarea>
+                </div>
+
+                <div class="p-4 border-t border-slate-800 glass grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    <button onclick="workerAction('analyze')" class="flex items-center justify-center space-x-2 py-3 rounded-xl bg-blue-500/10 text-blue-400 text-[10px] font-black tracking-widest hover:bg-blue-500/20 transition-all">
+                        <i class="fa-solid fa-magnifying-glass-chart"></i>
+                        <span>ANALYZE</span>
+                    </button>
+                    <button onclick="workerAction('review')" class="flex items-center justify-center space-x-2 py-3 rounded-xl bg-indigo-500/10 text-indigo-400 text-[10px] font-black tracking-widest hover:bg-indigo-500/20 transition-all">
+                        <i class="fa-solid fa-shield-check"></i>
+                        <span>REVIEW</span>
+                    </button>
+                    <button onclick="workerAction('generate')" class="flex items-center justify-center space-x-2 py-3 rounded-xl bg-purple-500/10 text-purple-400 text-[10px] font-black tracking-widest hover:bg-purple-500/20 transition-all">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        <span>GENERATE</span>
+                    </button>
+                    <button onclick="saveToR2()" class="flex items-center justify-center space-x-2 py-3 rounded-xl bg-emerald-500/10 text-emerald-400 text-[10px] font-black tracking-widest hover:bg-emerald-500/20 transition-all">
+                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                        <span>SAVE R2</span>
+                    </button>
+                    <button onclick="deployWorker()" class="flex items-center justify-center space-x-2 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-[10px] font-black tracking-widest hover:from-blue-500 hover:to-indigo-500 transition-all shadow-lg shadow-blue-500/20">
+                        <i class="fa-solid fa-bolt"></i>
+                        <span>DEPLOY</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Settings Modal -->
         <div id="modal-settings" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-6">
             <div class="w-full max-w-sm glass rounded-3xl p-8 shadow-2xl">
@@ -256,14 +340,15 @@ app.get('/', (c) => {
     </div>
 
     <script>
-        const state = {
+        window.state = {
             cfAccountId: localStorage.getItem('cfAccountId') || '',
             cfToken: localStorage.getItem('cfToken') || '',
             aiKey: localStorage.getItem('aiKey') || '',
             account: null,
             workers: [],
             dns: [],
-            sidebarOpen: false
+            sidebarOpen: false,
+            currentWorker: null
         };
 
         async function init() {
@@ -284,7 +369,7 @@ app.get('/', (c) => {
             }
         }
 
-        async function syncFromR2(key) {
+        window.syncFromR2 = async function(key) {
             try {
                 const res = await fetch("/api/config?user=default&key=" + encodeURIComponent(key));
                 if (res.ok) {
@@ -299,12 +384,12 @@ app.get('/', (c) => {
             } catch (e) {}
         }
 
-        function showLogin() {
+        window.showLogin = function() {
             document.getElementById('view-login').classList.remove('hidden');
             document.getElementById('view-dashboard').classList.add('hidden');
         }
 
-        async function showDashboard() {
+        window.showDashboard = async function() {
             document.getElementById('view-login').classList.add('hidden');
             document.getElementById('view-dashboard').classList.remove('hidden');
             document.getElementById('set-cf-account-id').value = state.cfAccountId;
@@ -313,12 +398,12 @@ app.get('/', (c) => {
             await loadData();
         }
 
-        function logout() {
+        window.logout = function() {
             localStorage.clear();
             location.reload();
         }
 
-        function toggleSidebar() {
+        window.toggleSidebar = function() {
             state.sidebarOpen = !state.sidebarOpen;
             const sidebar = document.getElementById('sidebar');
             const backdrop = document.getElementById('sidebar-backdrop');
@@ -331,11 +416,15 @@ app.get('/', (c) => {
             }
         }
 
-        function toggleSettings() {
+        window.toggleSettings = function() {
             document.getElementById('modal-settings').classList.toggle('hidden');
         }
 
-        async function saveSettings() {
+        window.toggleEditor = function() {
+            document.getElementById('modal-editor').classList.toggle('hidden');
+        }
+
+        window.saveSettings = async function() {
             state.cfAccountId = document.getElementById('set-cf-account-id').value;
             state.cfToken = document.getElementById('set-cf-token').value;
             state.aiKey = document.getElementById('set-ai-key').value;
@@ -363,7 +452,7 @@ app.get('/', (c) => {
             loadData();
         }
 
-        async function handleLogin() {
+        window.handleLogin = async function() {
             state.cfAccountId = document.getElementById('cf-account-id').value;
             state.cfToken = document.getElementById('cf-token').value;
             state.aiKey = document.getElementById('ai-key').value;
@@ -395,7 +484,7 @@ app.get('/', (c) => {
             showDashboard();
         }
 
-        async function loadData() {
+        window.loadData = async function() {
             try {
                 const accRes = await fetch('/api/cloudflare/account', {
                     headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
@@ -410,7 +499,7 @@ app.get('/', (c) => {
             await Promise.all([loadWorkers(), loadDNS()]);
         }
 
-        async function loadWorkers() {
+        window.loadWorkers = async function() {
             const content = document.getElementById('workers-list');
             content.innerHTML = '<div class="flex justify-center py-4"><div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div></div>';
             try {
@@ -422,8 +511,9 @@ app.get('/', (c) => {
                 content.innerHTML = state.workers.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4 uppercase font-bold tracking-tighter">None</p>';
                 state.workers.forEach(w => {
                     const item = document.createElement('div');
-                    item.className = 'p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/30 flex flex-col hover:bg-slate-800/60 transition-colors cursor-default';
+                    item.className = 'p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/30 flex flex-col hover:bg-slate-800/60 transition-all cursor-pointer transform active:scale-95';
                     item.innerHTML = "<span class='text-[10px] font-bold truncate text-slate-200'>" + w.id + "</span><span class='text-[8px] text-slate-500 uppercase font-black tracking-widest'>" + (w.usage_model || 'std') + "</span>";
+                    item.onclick = () => openWorker(w.id);
                     content.appendChild(item);
                 });
             } catch (e) {
@@ -431,7 +521,7 @@ app.get('/', (c) => {
             }
         }
 
-        async function loadDNS() {
+        window.loadDNS = async function() {
             const content = document.getElementById('dns-list');
             content.innerHTML = '<div class="flex justify-center py-4"><div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div></div>';
             try {
@@ -452,7 +542,74 @@ app.get('/', (c) => {
             }
         }
 
-        async function sendMessage() {
+        window.openWorker = async function(name) {
+            state.currentWorker = name;
+            document.getElementById('editor-worker-name').textContent = name;
+            const codeArea = document.getElementById('worker-code');
+            codeArea.value = 'Fetching code...';
+            toggleEditor();
+            toggleSidebar();
+
+            try {
+                const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
+                    headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
+                });
+                if (res.ok) {
+                    codeArea.value = await res.text();
+                } else {
+                    codeArea.value = '// Error fetching code from Cloudflare. Trying R2...';
+                    const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
+                    if (r2res.ok) {
+                        codeArea.value = await r2res.text();
+                    }
+                }
+            } catch (e) {
+                codeArea.value = '// Error: ' + e.message;
+            }
+        }
+
+        window.saveToR2 = async function() {
+            const name = state.currentWorker;
+            const code = document.getElementById('worker-code').value;
+            try {
+                const res = await fetch("/api/cloudflare/workers/" + name + "/storage", {
+                    method: 'POST',
+                    body: code
+                });
+                if (res.ok) alert('Saved to R2 successfully');
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        window.deployWorker = async function() {
+            const name = state.currentWorker;
+            const code = document.getElementById('worker-code').value;
+            if (!confirm('Deploy changes to Cloudflare?')) return;
+            try {
+                const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
+                    method: 'PUT',
+                    headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken },
+                    body: code
+                });
+                const data = await res.json();
+                if (data.success) alert('Deployed successfully!');
+                else alert('Deploy failed: ' + (data.errors?.[0]?.message || 'Unknown error'));
+            } catch (e) { alert('Error: ' + e.message); }
+        }
+
+        window.workerAction = async function(type) {
+            const code = document.getElementById('worker-code').value;
+            toggleEditor();
+            const bt = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+            let p = "";
+            if (type === 'analyze') p = "Analisa kode worker berikut dan jelaskan fungsinya:";
+            else if (type === 'review') p = "Review kode worker berikut, cari bug atau celah keamanan, dan berikan saran perbaikan:";
+            else if (type === 'generate') p = "Tolong perbaiki atau kembangkan fitur baru untuk kode worker ini dan berikan kodenya:";
+
+            document.getElementById('chat-input').value = p + "\n\n" + bt + "javascript\n" + code + "\n" + bt;
+            sendMessage();
+        }
+
+        window.sendMessage = async function() {
             const input = document.getElementById('chat-input');
             const promptStr = input.value.trim();
             if (!promptStr) return;
@@ -476,7 +633,7 @@ app.get('/', (c) => {
             }
         }
 
-        function appendMessage(role, text, id = null) {
+        window.appendMessage = function(role, text, id = null) {
             const container = document.getElementById('chat-messages');
             const div = document.createElement('div');
             div.className = "flex " + (role === 'user' ? 'justify-end' : 'justify-start');
@@ -486,7 +643,7 @@ app.get('/', (c) => {
             container.scrollTop = container.scrollHeight;
         }
 
-        function updateMessage(id, text) {
+        window.updateMessage = function(id, text) {
             const div = document.getElementById(id);
             if (div) {
                 div.querySelector('div').textContent = text;
