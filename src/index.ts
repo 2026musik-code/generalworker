@@ -60,12 +60,10 @@ app.get('/api/cloudflare/dns', async (c) => {
 })
 
 app.get('/api/ai/chat', async (c) => {
-  const apikey = c.req.query('apikey')
   const prompt = c.req.query('prompt')
-  if (!apikey || !prompt) return c.json({ error: 'Missing apikey or prompt' }, 400)
+  if (!prompt) return c.json({ error: 'Missing prompt' }, 400)
 
-  const url = new URL('https://api-v3.ahem7553.workers.dev/api/gateway/copilot')
-  url.searchParams.append('apikey', apikey)
+  const url = new URL('https://magma-api.biz.id/ai/gpt5')
   url.searchParams.append('prompt', prompt)
 
   try {
@@ -135,8 +133,8 @@ app.get('/', (c) => {
                         <input id="cf-token" type="password" placeholder="Enter API Token" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
                     <div class="space-y-2">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">AI API Key</label>
-                        <input id="ai-key" type="password" placeholder="Enter AI API Key" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">AI API Key (Opsional)</label>
+                        <input id="ai-key" type="password" placeholder="Opsional" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
 
                     <button onclick="handleLogin()" class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-500/20 transition-all transform active:scale-95 mt-4">
@@ -248,8 +246,8 @@ app.get('/', (c) => {
                         <input id="set-cf-token" type="password" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">AI Key</label>
-                        <input id="set-ai-key" type="password" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
+                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">AI Key (Opsional)</label>
+                        <input id="set-ai-key" type="password" placeholder="Opsional" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
                     <button onclick="saveSettings()" class="w-full bg-blue-600 py-4 rounded-2xl font-bold mt-4 shadow-lg shadow-blue-500/20 active:scale-95 transition-all">Save Changes</button>
                 </div>
@@ -279,7 +277,7 @@ app.get('/', (c) => {
                 await syncFromR2(localStorage.getItem('masterKey'));
             }
 
-            if (state.cfAccountId && state.cfToken && state.aiKey) {
+            if (state.cfAccountId && state.cfToken) {
                 showDashboard();
             } else {
                 showLogin();
@@ -370,8 +368,8 @@ app.get('/', (c) => {
             state.cfToken = document.getElementById('cf-token').value;
             state.aiKey = document.getElementById('ai-key').value;
 
-            if (!state.cfAccountId || !state.cfToken || !state.aiKey) {
-                alert('Please fill all fields');
+            if (!state.cfAccountId || !state.cfToken) {
+                alert('Please fill Cloudflare fields');
                 return;
             }
 
@@ -463,7 +461,7 @@ app.get('/', (c) => {
             const loadingId = 'loading-' + Date.now();
             appendMessage('ai', 'Thinking...', loadingId);
             try {
-                const res = await fetch("/api/ai/chat?apikey=" + state.aiKey + "&prompt=" + encodeURIComponent(promptStr));
+                const res = await fetch("/api/ai/chat?prompt=" + encodeURIComponent(promptStr));
                 const data = await res.json().catch(() => ({ error: 'Gagal memproses data AI.' }));
 
                 if (!res.ok) {
