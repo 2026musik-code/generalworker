@@ -32,8 +32,8 @@ app.get('/api/cloudflare/account', async (c) => {
   const token = c.req.header('X-CF-Token')
   if (!accountId || !token) return c.json({ error: 'Missing headers' }, 400)
 
-  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}`, {
-    headers: { 'Authorization': `Bearer ${token}` }
+  const response = await fetch("https://api.cloudflare.com/client/v4/accounts/" + accountId, {
+    headers: { 'Authorization': "Bearer " + token }
   })
   return c.json(await response.json())
 })
@@ -43,8 +43,8 @@ app.get('/api/cloudflare/workers', async (c) => {
   const token = c.req.header('X-CF-Token')
   if (!accountId || !token) return c.json({ error: 'Missing headers' }, 400)
 
-  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts`, {
-    headers: { 'Authorization': `Bearer ${token}` }
+  const response = await fetch("https://api.cloudflare.com/client/v4/accounts/" + accountId + "/workers/scripts", {
+    headers: { 'Authorization': "Bearer " + token }
   })
   return c.json(await response.json())
 })
@@ -53,9 +53,8 @@ app.get('/api/cloudflare/dns', async (c) => {
   const token = c.req.header('X-CF-Token')
   if (!token) return c.json({ error: 'Missing headers' }, 400)
 
-  // Listing zones is the first step for DNS
-  const response = await fetch(`https://api.cloudflare.com/client/v4/zones`, {
-    headers: { 'Authorization': `Bearer ${token}` }
+  const response = await fetch("https://api.cloudflare.com/client/v4/zones", {
+    headers: { 'Authorization': "Bearer " + token }
   })
   return c.json(await response.json())
 })
@@ -69,16 +68,30 @@ app.get('/api/ai/chat', async (c) => {
   url.searchParams.append('apikey', apikey)
   url.searchParams.append('prompt', prompt)
 
-  const response = await fetch(url.toString())
-  const text = await response.text()
   try {
-    const data = JSON.parse(text)
-    if (data.status && data.result && data.result.response) {
-      return c.json({ response: data.result.response })
+    const response = await fetch(url.toString())
+    const text = await response.text()
+
+    if (!response.ok) {
+        try {
+            const errJson = JSON.parse(text);
+            return c.json({ error: errJson.error || ("Error " + response.status) }, response.status as any)
+        } catch (e) {
+            return c.json({ error: "API Error " + response.status }, response.status as any)
+        }
     }
-    return c.json(data)
-  } catch (e) {
-    return c.text(text)
+
+    try {
+        const data = JSON.parse(text)
+        if (data.status && data.result && data.result.response) {
+            return c.json({ response: data.result.response })
+        }
+        return c.json(data)
+    } catch (e) {
+        return c.json({ response: text })
+    }
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Internal Server Error' }, 500)
   }
 })
 
@@ -93,15 +106,17 @@ app.get('/', (c) => {
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        body { background-color: #0f172a; color: #f8fafc; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
         .gradient-text { background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
     </style>
 </head>
 <body class="min-h-screen flex flex-col">
     <div id="app" class="flex-grow flex flex-col relative overflow-hidden">
-        <div class="absolute top-0 left-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2"></div>
-        <div class="absolute bottom-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl translate-x-1/3 translate-y-1/3"></div>
+        <div class="absolute top-0 left-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
+        <div class="absolute bottom-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
 
         <div id="view-login" class="flex-grow flex flex-col items-center justify-center p-6 z-10">
             <div class="w-full max-w-md glass rounded-3xl p-8 shadow-2xl">
@@ -113,23 +128,20 @@ app.get('/', (c) => {
                 <div class="space-y-4">
                     <div class="space-y-2">
                         <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">Cloudflare Account ID</label>
-                        <input id="cf-account-id" type="text" placeholder="Enter Account ID" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all">
+                        <input id="cf-account-id" type="text" placeholder="Enter Account ID" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
                     <div class="space-y-2">
                         <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">Cloudflare API Token</label>
-                        <input id="cf-token" type="password" placeholder="Enter API Token" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all">
+                        <input id="cf-token" type="password" placeholder="Enter API Token" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
                     <div class="space-y-2">
                         <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">AI API Key</label>
-                        <input id="ai-key" type="password" placeholder="Enter AI API Key" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all">
+                        <input id="ai-key" type="password" placeholder="Enter AI API Key" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
 
                     <button onclick="handleLogin()" class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-500/20 transition-all transform active:scale-95 mt-4">
                         GET STARTED
                     </button>
-                </div>
-                <div class="mt-6 text-center">
-                    <p class="text-[10px] text-slate-500 uppercase tracking-widest">Modern Executive Dashboard</p>
                 </div>
             </div>
         </div>
@@ -154,16 +166,16 @@ app.get('/', (c) => {
 
             <main class="flex-grow flex relative overflow-hidden">
                 <aside id="sidebar" class="fixed inset-y-0 left-0 w-80 glass z-40 transform -translate-x-full transition-transform duration-300 ease-in-out flex flex-col border-r border-slate-800">
-                    <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800">
-                        <span class="font-bold text-sm uppercase tracking-widest text-slate-400">Cloudflare Data</span>
+                    <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-slate-900/20">
+                        <span class="font-black text-xs uppercase tracking-widest text-slate-400">DASHBOARD</span>
                         <button onclick="toggleSidebar()" class="text-slate-500 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
                     </div>
 
-                    <div class="p-4 border-b border-slate-800 bg-slate-800/20">
-                        <div id="cf-profile-data" class="flex items-center space-x-3">
-                            <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-sm font-bold shadow-lg">CF</div>
+                    <div class="p-6 border-b border-slate-800 bg-slate-800/20">
+                        <div class="flex items-center space-x-4">
+                            <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-lg font-bold shadow-lg">CF</div>
                             <div class="flex flex-col overflow-hidden">
-                                <span id="cf-account-name" class="text-xs font-bold truncate">Loading Account...</span>
+                                <span id="cf-account-name" class="text-sm font-bold truncate">Loading...</span>
                                 <span id="cf-account-id-display" class="text-[10px] text-slate-500 truncate">ID: ...</span>
                             </div>
                         </div>
@@ -172,45 +184,45 @@ app.get('/', (c) => {
                     <div class="flex-grow flex flex-col overflow-hidden">
                         <div class="grid grid-cols-2 h-full">
                             <div class="border-r border-slate-800 flex flex-col overflow-hidden">
-                                <div class="px-3 py-2 border-b border-slate-800 bg-slate-800/10 flex items-center space-x-2">
+                                <div class="px-4 py-3 border-b border-slate-800 bg-slate-800/10 flex items-center space-x-2">
                                     <i class="fa-solid fa-microchip text-[10px] text-blue-400"></i>
                                     <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Workers</span>
                                 </div>
-                                <div id="workers-list" class="flex-grow overflow-y-auto p-2 space-y-2"></div>
+                                <div id="workers-list" class="flex-grow overflow-y-auto p-3 space-y-3"></div>
                             </div>
                             <div class="flex flex-col overflow-hidden">
-                                <div class="px-3 py-2 border-b border-slate-800 bg-slate-800/10 flex items-center space-x-2">
+                                <div class="px-4 py-3 border-b border-slate-800 bg-slate-800/10 flex items-center space-x-2">
                                     <i class="fa-solid fa-globe text-[10px] text-indigo-400"></i>
                                     <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">DNS Zones</span>
                                 </div>
-                                <div id="dns-list" class="flex-grow overflow-y-auto p-2 space-y-2"></div>
+                                <div id="dns-list" class="flex-grow overflow-y-auto p-3 space-y-3"></div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="p-4 border-t border-slate-800">
-                        <button onclick="logout()" class="w-full flex items-center justify-center space-x-2 py-3 rounded-xl bg-red-500/10 text-red-500 text-sm font-bold hover:bg-red-500/20 transition-all">
+                    <div class="p-6 border-t border-slate-800">
+                        <button onclick="logout()" class="w-full flex items-center justify-center space-x-2 py-4 rounded-2xl bg-red-500/10 text-red-500 text-xs font-black tracking-widest hover:bg-red-500/20 transition-all">
                             <i class="fa-solid fa-right-from-bracket"></i>
                             <span>LOGOUT</span>
                         </button>
                     </div>
                 </aside>
 
-                <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-30 hidden"></div>
+                <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 hidden transition-opacity duration-300"></div>
 
                 <section class="flex-grow flex flex-col bg-slate-950/30 relative overflow-hidden">
-                    <div id="chat-messages" class="flex-grow overflow-y-auto p-6 space-y-6">
+                    <div id="chat-messages" class="flex-grow overflow-y-auto p-6 space-y-6 scroll-smooth">
                         <div class="flex justify-start">
-                            <div class="max-w-[85%] glass rounded-2xl rounded-tl-none p-4 text-sm leading-relaxed">
+                            <div class="max-w-[85%] glass rounded-2xl rounded-tl-none p-4 text-sm leading-relaxed shadow-lg">
                                 Hello! I'm your General Worker AI assistant. How can I help you today?
                             </div>
                         </div>
                     </div>
 
-                    <div class="p-4 border-t border-slate-800 glass">
+                    <div class="p-4 border-t border-slate-800 glass relative z-10">
                         <div class="flex items-center space-x-2">
-                            <input id="chat-input" type="text" placeholder="Type a message..." class="flex-grow bg-slate-800/50 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all">
-                            <button onclick="sendMessage()" class="w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20 active:scale-95 transition-all">
+                            <input id="chat-input" type="text" placeholder="Type a message..." class="flex-grow bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all">
+                            <button onclick="sendMessage()" class="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20 active:scale-95 transition-all text-white">
                                 <i class="fa-solid fa-paper-plane"></i>
                             </button>
                         </div>
@@ -219,26 +231,27 @@ app.get('/', (c) => {
             </main>
         </div>
 
-        <div id="modal-settings" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6">
-            <div class="w-full max-w-sm glass rounded-3xl p-6 shadow-2xl">
-                <div class="flex justify-between items-center mb-6">
+        <!-- Settings Modal -->
+        <div id="modal-settings" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-6">
+            <div class="w-full max-w-sm glass rounded-3xl p-8 shadow-2xl">
+                <div class="flex justify-between items-center mb-8">
                     <h2 class="text-xl font-bold">Settings</h2>
                     <button onclick="toggleSettings()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
                 </div>
-                <div class="space-y-4">
+                <div class="space-y-5">
                     <div class="space-y-1">
-                        <label class="text-[10px] font-bold uppercase text-slate-500">Account ID</label>
-                        <input id="set-cf-account-id" type="text" class="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2 text-sm">
+                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Account ID</label>
+                        <input id="set-cf-account-id" type="text" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] font-bold uppercase text-slate-500">API Token</label>
-                        <input id="set-cf-token" type="password" class="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2 text-sm">
+                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">API Token</label>
+                        <input id="set-cf-token" type="password" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] font-bold uppercase text-slate-500">AI Key</label>
-                        <input id="set-ai-key" type="password" class="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2 text-sm">
+                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">AI Key</label>
+                        <input id="set-ai-key" type="password" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
-                    <button onclick="saveSettings()" class="w-full bg-blue-600 py-3 rounded-xl font-bold mt-4">Save Changes</button>
+                    <button onclick="saveSettings()" class="w-full bg-blue-600 py-4 rounded-2xl font-bold mt-4 shadow-lg shadow-blue-500/20 active:scale-95 transition-all">Save Changes</button>
                 </div>
             </div>
         </div>
@@ -275,7 +288,7 @@ app.get('/', (c) => {
 
         async function syncFromR2(key) {
             try {
-                const res = await fetch("/api/config?user=default&key=" + key);
+                const res = await fetch("/api/config?user=default&key=" + encodeURIComponent(key));
                 if (res.ok) {
                     const config = await res.json();
                     state.cfAccountId = config.cfAccountId;
@@ -337,7 +350,7 @@ app.get('/', (c) => {
 
             if (masterKey) {
                 try {
-                    await fetch("/api/config?user=default&key=" + masterKey, {
+                    await fetch("/api/config?user=default&key=" + encodeURIComponent(masterKey), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -356,21 +369,21 @@ app.get('/', (c) => {
             state.cfAccountId = document.getElementById('cf-account-id').value;
             state.cfToken = document.getElementById('cf-token').value;
             state.aiKey = document.getElementById('ai-key').value;
-            const masterKey = prompt("Masukkan Master Key untuk simpan ke R2:");
 
             if (!state.cfAccountId || !state.cfToken || !state.aiKey) {
                 alert('Please fill all fields');
                 return;
             }
 
+            const masterKey = prompt("Buat Master Key untuk simpan ke R2 (opsional, cancel jika tidak mau):");
+
             localStorage.setItem('cfAccountId', state.cfAccountId);
             localStorage.setItem('cfToken', state.cfToken);
             localStorage.setItem('aiKey', state.aiKey);
-            if (masterKey) localStorage.setItem('masterKey', masterKey);
-
             if (masterKey) {
+                localStorage.setItem('masterKey', masterKey);
                 try {
-                    await fetch("/api/config?user=default&key=" + masterKey, {
+                    await fetch("/api/config?user=default&key=" + encodeURIComponent(masterKey), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -408,15 +421,15 @@ app.get('/', (c) => {
                 });
                 const data = await res.json();
                 state.workers = data.result || [];
-                content.innerHTML = state.workers.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4">None</p>';
+                content.innerHTML = state.workers.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4 uppercase font-bold tracking-tighter">None</p>';
                 state.workers.forEach(w => {
                     const item = document.createElement('div');
-                    item.className = 'p-2 rounded-lg bg-slate-800/40 border border-slate-700/30 flex flex-col';
-                    item.innerHTML = "<span class='text-[9px] font-bold truncate'>" + w.id + "</span><span class='text-[7px] text-slate-500 uppercase'>" + (w.usage_model || 'std') + "</span>";
+                    item.className = 'p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/30 flex flex-col hover:bg-slate-800/60 transition-colors cursor-default';
+                    item.innerHTML = "<span class='text-[10px] font-bold truncate text-slate-200'>" + w.id + "</span><span class='text-[8px] text-slate-500 uppercase font-black tracking-widest'>" + (w.usage_model || 'std') + "</span>";
                     content.appendChild(item);
                 });
             } catch (e) {
-                content.innerHTML = '<p class="text-center text-red-400 text-[8px] py-4">Error</p>';
+                content.innerHTML = '<p class="text-center text-red-400 text-[8px] py-4 uppercase font-bold">Error</p>';
             }
         }
 
@@ -429,15 +442,15 @@ app.get('/', (c) => {
                 });
                 const data = await res.json();
                 state.dns = data.result || [];
-                content.innerHTML = state.dns.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4">None</p>';
+                content.innerHTML = state.dns.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4 uppercase font-bold tracking-tighter">None</p>';
                 state.dns.forEach(z => {
                     const item = document.createElement('div');
-                    item.className = 'p-2 rounded-lg bg-slate-800/40 border border-slate-700/30 flex flex-col';
-                    item.innerHTML = "<span class='text-[9px] font-bold truncate'>" + z.name + "</span><span class='text-[7px] text-green-400 uppercase'>" + z.status + "</span>";
+                    item.className = 'p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/30 flex flex-col hover:bg-slate-800/60 transition-colors cursor-default';
+                    item.innerHTML = "<span class='text-[10px] font-bold truncate text-slate-200'>" + z.name + "</span><span class='text-[8px] text-green-500/80 uppercase font-black tracking-widest'>" + z.status + "</span>";
                     content.appendChild(item);
                 });
             } catch (e) {
-                content.innerHTML = '<p class="text-center text-red-400 text-[8px] py-4">Error</p>';
+                content.innerHTML = '<p class="text-center text-red-400 text-[8px] py-4 uppercase font-bold">Error</p>';
             }
         }
 
@@ -451,11 +464,17 @@ app.get('/', (c) => {
             appendMessage('ai', 'Thinking...', loadingId);
             try {
                 const res = await fetch("/api/ai/chat?apikey=" + state.aiKey + "&prompt=" + encodeURIComponent(promptStr));
-                const data = await res.json();
+                const data = await res.json().catch(() => ({ error: 'Gagal memproses data AI.' }));
+
+                if (!res.ok) {
+                    throw new Error(data.error || "Gagal mendapatkan respon dari AI.");
+                }
+
                 const responseText = data.response || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
                 updateMessage(loadingId, responseText);
             } catch (e) {
-                updateMessage(loadingId, 'Kesalahan: Gagal mendapatkan respons dari AI.');
+                console.error(e);
+                updateMessage(loadingId, 'Kesalahan: ' + (e.message || 'Gagal mendapatkan respon dari AI.'));
             }
         }
 
@@ -464,7 +483,7 @@ app.get('/', (c) => {
             const div = document.createElement('div');
             div.className = "flex " + (role === 'user' ? 'justify-end' : 'justify-start');
             if (id) div.id = id;
-            div.innerHTML = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed shadow-lg'>" + text + "</div>";
+            div.innerHTML = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed shadow-lg shadow-black/20'>" + text + "</div>";
             container.appendChild(div);
             container.scrollTop = container.scrollHeight;
         }
