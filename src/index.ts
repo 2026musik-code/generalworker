@@ -1,7 +1,31 @@
 import { Hono } from 'hono'
 import { html } from 'hono/html'
 
-const app = new Hono()
+type Bindings = {
+  R2: R2Bucket
+}
+
+const app = new Hono<{ Bindings: Bindings }>()
+
+app.get('/api/config', async (c) => {
+  const userId = c.req.query('user') || 'default'
+  const key = c.req.query('key')
+  if (!key) return c.json({ error: 'Unauthorized' }, 401)
+
+  const config = await c.env.R2.get(`config_${userId}_${key}`)
+  if (!config) return c.json({ error: 'Not found' }, 404)
+  return c.json(await config.json())
+})
+
+app.post('/api/config', async (c) => {
+  const userId = c.req.query('user') || 'default'
+  const key = c.req.query('key')
+  if (!key) return c.json({ error: 'Unauthorized' }, 401)
+
+  const body = await c.req.json()
+  await c.env.R2.put(`config_${userId}_${key}`, JSON.stringify(body))
+  return c.json({ success: true })
+})
 
 app.get('/api/cloudflare/account', async (c) => {
   const accountId = c.req.header('X-CF-Account-ID')
@@ -46,10 +70,13 @@ app.get('/api/ai/chat', async (c) => {
   url.searchParams.append('prompt', prompt)
 
   const response = await fetch(url.toString())
-  // Use text() because the response might not be JSON or could have issues with jq piping in the example
   const text = await response.text()
   try {
-    return c.json(JSON.parse(text))
+    const data = JSON.parse(text)
+    if (data.status && data.result && data.result.response) {
+      return c.json({ response: data.result.response })
+    }
+    return c.json(data)
   } catch (e) {
     return c.text(text)
   }
@@ -73,7 +100,6 @@ app.get('/', (c) => {
 </head>
 <body class="min-h-screen flex flex-col">
     <div id="app" class="flex-grow flex flex-col relative overflow-hidden">
-        <!-- Background decorative elements -->
         <div class="absolute top-0 left-0 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2"></div>
         <div class="absolute bottom-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl translate-x-1/3 translate-y-1/3"></div>
 
@@ -109,8 +135,7 @@ app.get('/', (c) => {
         </div>
 
         <div id="view-dashboard" class="hidden flex-grow flex flex-col h-screen overflow-hidden z-10">
-            <!-- Header -->
-            <header class="h-16 flex items-center justify-between px-4 border-b border-slate-800 glass z-20">
+            <header class="h-16 flex items-center justify-between px-4 border-b border-slate-800 glass z-30">
                 <div class="flex items-center space-x-2">
                     <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
                         <i class="fa-solid fa-bolt text-xs"></i>
@@ -121,16 +146,19 @@ app.get('/', (c) => {
                     <button onclick="toggleSettings()" class="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-slate-800 transition-colors">
                         <i class="fa-solid fa-sliders text-slate-400 text-sm"></i>
                     </button>
-                    <button onclick="logout()" class="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-red-500/10 transition-colors">
-                        <i class="fa-solid fa-right-from-bracket text-red-400 text-sm"></i>
+                    <button onclick="toggleSidebar()" class="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-slate-800 transition-colors">
+                        <i class="fa-solid fa-bars text-slate-400 text-sm"></i>
                     </button>
                 </div>
             </header>
 
-            <main class="flex-grow flex flex-col lg:flex-row overflow-hidden">
-                <!-- Sidebar -->
-                <aside id="sidebar" class="w-full lg:w-96 border-r border-slate-800 flex flex-col bg-slate-900/50 overflow-hidden">
-                    <!-- Profile area (Pojok kiri atas sidebar) -->
+            <main class="flex-grow flex relative overflow-hidden">
+                <aside id="sidebar" class="fixed inset-y-0 left-0 w-80 glass z-40 transform -translate-x-full transition-transform duration-300 ease-in-out flex flex-col border-r border-slate-800">
+                    <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800">
+                        <span class="font-bold text-sm uppercase tracking-widest text-slate-400">Cloudflare Data</span>
+                        <button onclick="toggleSidebar()" class="text-slate-500 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+
                     <div class="p-4 border-b border-slate-800 bg-slate-800/20">
                         <div id="cf-profile-data" class="flex items-center space-x-3">
                             <div class="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-sm font-bold shadow-lg">CF</div>
@@ -141,34 +169,35 @@ app.get('/', (c) => {
                         </div>
                     </div>
 
-                    <!-- Lists area (Worker and DNS) -->
                     <div class="flex-grow flex flex-col overflow-hidden">
                         <div class="grid grid-cols-2 h-full">
-                            <!-- Workers List -->
                             <div class="border-r border-slate-800 flex flex-col overflow-hidden">
                                 <div class="px-3 py-2 border-b border-slate-800 bg-slate-800/10 flex items-center space-x-2">
                                     <i class="fa-solid fa-microchip text-[10px] text-blue-400"></i>
                                     <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Workers</span>
                                 </div>
-                                <div id="workers-list" class="flex-grow overflow-y-auto p-2 space-y-2">
-                                    <!-- Workers injected here -->
-                                </div>
+                                <div id="workers-list" class="flex-grow overflow-y-auto p-2 space-y-2"></div>
                             </div>
-                            <!-- DNS List -->
                             <div class="flex flex-col overflow-hidden">
                                 <div class="px-3 py-2 border-b border-slate-800 bg-slate-800/10 flex items-center space-x-2">
                                     <i class="fa-solid fa-globe text-[10px] text-indigo-400"></i>
                                     <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">DNS Zones</span>
                                 </div>
-                                <div id="dns-list" class="flex-grow overflow-y-auto p-2 space-y-2">
-                                    <!-- DNS injected here -->
-                                </div>
+                                <div id="dns-list" class="flex-grow overflow-y-auto p-2 space-y-2"></div>
                             </div>
                         </div>
                     </div>
+
+                    <div class="p-4 border-t border-slate-800">
+                        <button onclick="logout()" class="w-full flex items-center justify-center space-x-2 py-3 rounded-xl bg-red-500/10 text-red-500 text-sm font-bold hover:bg-red-500/20 transition-all">
+                            <i class="fa-solid fa-right-from-bracket"></i>
+                            <span>LOGOUT</span>
+                        </button>
+                    </div>
                 </aside>
 
-                <!-- Chat Area (Tengah) -->
+                <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-30 hidden"></div>
+
                 <section class="flex-grow flex flex-col bg-slate-950/30 relative overflow-hidden">
                     <div id="chat-messages" class="flex-grow overflow-y-auto p-6 space-y-6">
                         <div class="flex justify-start">
@@ -190,7 +219,6 @@ app.get('/', (c) => {
             </main>
         </div>
 
-        <!-- Settings Modal -->
         <div id="modal-settings" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6">
             <div class="w-full max-w-sm glass rounded-3xl p-6 shadow-2xl">
                 <div class="flex justify-between items-center mb-6">
@@ -221,18 +249,43 @@ app.get('/', (c) => {
             cfAccountId: localStorage.getItem('cfAccountId') || '',
             cfToken: localStorage.getItem('cfToken') || '',
             aiKey: localStorage.getItem('aiKey') || '',
-            currentTab: 'workers',
             account: null,
             workers: [],
-            dns: []
+            dns: [],
+            sidebarOpen: false
         };
 
-        function init() {
+        async function init() {
+            if (!state.cfAccountId) {
+                const masterKey = prompt("Masukkan Master Key untuk mengambil data dari R2:");
+                if (masterKey) {
+                    localStorage.setItem('masterKey', masterKey);
+                    await syncFromR2(masterKey);
+                }
+            } else if (localStorage.getItem('masterKey')) {
+                await syncFromR2(localStorage.getItem('masterKey'));
+            }
+
             if (state.cfAccountId && state.cfToken && state.aiKey) {
                 showDashboard();
             } else {
                 showLogin();
             }
+        }
+
+        async function syncFromR2(key) {
+            try {
+                const res = await fetch("/api/config?user=default&key=" + key);
+                if (res.ok) {
+                    const config = await res.json();
+                    state.cfAccountId = config.cfAccountId;
+                    state.cfToken = config.cfToken;
+                    state.aiKey = config.aiKey;
+                    localStorage.setItem('cfAccountId', state.cfAccountId);
+                    localStorage.setItem('cfToken', state.cfToken);
+                    localStorage.setItem('aiKey', state.aiKey);
+                }
+            } catch (e) {}
         }
 
         function showLogin() {
@@ -243,19 +296,67 @@ app.get('/', (c) => {
         async function showDashboard() {
             document.getElementById('view-login').classList.add('hidden');
             document.getElementById('view-dashboard').classList.remove('hidden');
-
-            // Fill settings inputs
             document.getElementById('set-cf-account-id').value = state.cfAccountId;
             document.getElementById('set-cf-token').value = state.cfToken;
             document.getElementById('set-ai-key').value = state.aiKey;
-
             await loadData();
         }
 
-        function handleLogin() {
+        function logout() {
+            localStorage.clear();
+            location.reload();
+        }
+
+        function toggleSidebar() {
+            state.sidebarOpen = !state.sidebarOpen;
+            const sidebar = document.getElementById('sidebar');
+            const backdrop = document.getElementById('sidebar-backdrop');
+            if (state.sidebarOpen) {
+                sidebar.classList.remove('-translate-x-full');
+                backdrop.classList.remove('hidden');
+            } else {
+                sidebar.classList.add('-translate-x-full');
+                backdrop.classList.add('hidden');
+            }
+        }
+
+        function toggleSettings() {
+            document.getElementById('modal-settings').classList.toggle('hidden');
+        }
+
+        async function saveSettings() {
+            state.cfAccountId = document.getElementById('set-cf-account-id').value;
+            state.cfToken = document.getElementById('set-cf-token').value;
+            state.aiKey = document.getElementById('set-ai-key').value;
+            const masterKey = localStorage.getItem('masterKey') || prompt("Masukkan Master Key untuk simpan ke R2:");
+
+            localStorage.setItem('cfAccountId', state.cfAccountId);
+            localStorage.setItem('cfToken', state.cfToken);
+            localStorage.setItem('aiKey', state.aiKey);
+            if (masterKey) localStorage.setItem('masterKey', masterKey);
+
+            if (masterKey) {
+                try {
+                    await fetch("/api/config?user=default&key=" + masterKey, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            cfAccountId: state.cfAccountId,
+                            cfToken: state.cfToken,
+                            aiKey: state.aiKey
+                        })
+                    });
+                } catch (e) {}
+            }
+            toggleSettings();
+            loadData();
+        }
+
+        async function handleLogin() {
             state.cfAccountId = document.getElementById('cf-account-id').value;
             state.cfToken = document.getElementById('cf-token').value;
             state.aiKey = document.getElementById('ai-key').value;
+            const masterKey = prompt("Masukkan Master Key untuk simpan ke R2:");
 
             if (!state.cfAccountId || !state.cfToken || !state.aiKey) {
                 alert('Please fill all fields');
@@ -265,34 +366,25 @@ app.get('/', (c) => {
             localStorage.setItem('cfAccountId', state.cfAccountId);
             localStorage.setItem('cfToken', state.cfToken);
             localStorage.setItem('aiKey', state.aiKey);
+            if (masterKey) localStorage.setItem('masterKey', masterKey);
 
+            if (masterKey) {
+                try {
+                    await fetch("/api/config?user=default&key=" + masterKey, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            cfAccountId: state.cfAccountId,
+                            cfToken: state.cfToken,
+                            aiKey: state.aiKey
+                        })
+                    });
+                } catch (e) {}
+            }
             showDashboard();
         }
 
-        function logout() {
-            localStorage.clear();
-            location.reload();
-        }
-
-        function toggleSettings() {
-            document.getElementById('modal-settings').classList.toggle('hidden');
-        }
-
-        function saveSettings() {
-            state.cfAccountId = document.getElementById('set-cf-account-id').value;
-            state.cfToken = document.getElementById('set-cf-token').value;
-            state.aiKey = document.getElementById('set-ai-key').value;
-
-            localStorage.setItem('cfAccountId', state.cfAccountId);
-            localStorage.setItem('cfToken', state.cfToken);
-            localStorage.setItem('aiKey', state.aiKey);
-
-            toggleSettings();
-            loadData();
-        }
-
         async function loadData() {
-            // Load Account info
             try {
                 const accRes = await fetch('/api/cloudflare/account', {
                     headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
@@ -303,8 +395,7 @@ app.get('/', (c) => {
                     document.getElementById('cf-account-name').textContent = state.account.name;
                     document.getElementById('cf-account-id-display').textContent = 'ID: ' + state.account.id;
                 }
-            } catch (e) { console.error(e); }
-
+            } catch (e) {}
             await Promise.all([loadWorkers(), loadDNS()]);
         }
 
@@ -317,15 +408,11 @@ app.get('/', (c) => {
                 });
                 const data = await res.json();
                 state.workers = data.result || [];
-
                 content.innerHTML = state.workers.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4">None</p>';
                 state.workers.forEach(w => {
                     const item = document.createElement('div');
                     item.className = 'p-2 rounded-lg bg-slate-800/40 border border-slate-700/30 flex flex-col';
-                    item.innerHTML = \`
-                        <span class="text-[9px] font-bold truncate">\${w.id}</span>
-                        <span class="text-[7px] text-slate-500 uppercase">\${w.usage_model || 'std'}</span>
-                    \`;
+                    item.innerHTML = "<span class='text-[9px] font-bold truncate'>" + w.id + "</span><span class='text-[7px] text-slate-500 uppercase'>" + (w.usage_model || 'std') + "</span>";
                     content.appendChild(item);
                 });
             } catch (e) {
@@ -342,15 +429,11 @@ app.get('/', (c) => {
                 });
                 const data = await res.json();
                 state.dns = data.result || [];
-
                 content.innerHTML = state.dns.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4">None</p>';
                 state.dns.forEach(z => {
                     const item = document.createElement('div');
                     item.className = 'p-2 rounded-lg bg-slate-800/40 border border-slate-700/30 flex flex-col';
-                    item.innerHTML = \`
-                        <span class="text-[9px] font-bold truncate">\${z.name}</span>
-                        <span class="text-[7px] text-green-400 uppercase">\${z.status}</span>
-                    \`;
+                    item.innerHTML = "<span class='text-[9px] font-bold truncate'>" + z.name + "</span><span class='text-[7px] text-green-400 uppercase'>" + z.status + "</span>";
                     content.appendChild(item);
                 });
             } catch (e) {
@@ -360,37 +443,28 @@ app.get('/', (c) => {
 
         async function sendMessage() {
             const input = document.getElementById('chat-input');
-            const prompt = input.value.trim();
-            if (!prompt) return;
-
+            const promptStr = input.value.trim();
+            if (!promptStr) return;
             input.value = '';
-            appendMessage('user', prompt);
-
+            appendMessage('user', promptStr);
             const loadingId = 'loading-' + Date.now();
             appendMessage('ai', 'Thinking...', loadingId);
-
             try {
-                const res = await fetch(\`/api/ai/chat?apikey=\${state.aiKey}&prompt=\${encodeURIComponent(prompt)}\`);
+                const res = await fetch("/api/ai/chat?apikey=" + state.aiKey + "&prompt=" + encodeURIComponent(promptStr));
                 const data = await res.json();
-
                 const responseText = data.response || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
                 updateMessage(loadingId, responseText);
             } catch (e) {
-                updateMessage(loadingId, 'Error: Failed to get response from AI.');
+                updateMessage(loadingId, 'Kesalahan: Gagal mendapatkan respons dari AI.');
             }
         }
 
         function appendMessage(role, text, id = null) {
             const container = document.getElementById('chat-messages');
             const div = document.createElement('div');
-            div.className = \`flex \${role === 'user' ? 'justify-end' : 'justify-start'}\`;
+            div.className = "flex " + (role === 'user' ? 'justify-end' : 'justify-start');
             if (id) div.id = id;
-
-            div.innerHTML = \`
-                <div class="max-w-[85%] \${role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none'} rounded-2xl p-4 text-sm leading-relaxed shadow-lg">
-                    \${text}
-                </div>
-            \`;
+            div.innerHTML = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed shadow-lg'>" + text + "</div>";
             container.appendChild(div);
             container.scrollTop = container.scrollHeight;
         }
@@ -404,7 +478,6 @@ app.get('/', (c) => {
             }
         }
 
-        // Event listeners
         document.getElementById('chat-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendMessage();
         });
