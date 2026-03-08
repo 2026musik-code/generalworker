@@ -27,40 +27,50 @@ app.post('/api/config', async (c) => {
   return c.json({ success: true })
 })
 
+const getCFHeaders = (c: any) => {
+  const token = c.req.header('X-CF-Token')
+  const email = c.req.header('X-CF-Email')
+  const headers: any = {}
+  if (email && email !== 'undefined' && email !== '') {
+    headers['X-Auth-Email'] = email
+    headers['X-Auth-Key'] = token
+  } else {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return headers
+}
+
 app.get('/api/cloudflare/account', async (c) => {
   const accountId = c.req.header('X-CF-Account-ID')
-  const token = c.req.header('X-CF-Token')
-  if (!accountId || !token) return c.json({ error: 'Missing headers' }, 400)
+  if (!accountId) return c.json({ error: 'Missing account ID' }, 400)
 
   const response = await fetch("https://api.cloudflare.com/client/v4/accounts/" + accountId, {
-    headers: { 'Authorization': "Bearer " + token }
+    headers: getCFHeaders(c)
   })
   return c.json(await response.json())
 })
 
 app.get('/api/cloudflare/workers/:name/content', async (c) => {
   const accountId = c.req.header('X-CF-Account-ID')
-  const token = c.req.header('X-CF-Token')
   const name = c.req.param('name')
-  if (!accountId || !token) return c.json({ error: 'Missing headers' }, 400)
+  if (!accountId) return c.json({ error: 'Missing account ID' }, 400)
 
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}/content`, {
-    headers: { 'Authorization': `Bearer ${token}` }
+    headers: getCFHeaders(c)
   })
   return new Response(response.body, { headers: { 'Content-Type': 'text/javascript' } })
 })
 
 app.put('/api/cloudflare/workers/:name/content', async (c) => {
   const accountId = c.req.header('X-CF-Account-ID')
-  const token = c.req.header('X-CF-Token')
   const name = c.req.param('name')
-  if (!accountId || !token) return c.json({ error: 'Missing headers' }, 400)
+  if (!accountId) return c.json({ error: 'Missing account ID' }, 400)
 
   const content = await c.req.text()
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}`, {
     method: 'PUT',
     headers: {
-        'Authorization': `Bearer ${token}`,
+        ...getCFHeaders(c),
         'Content-Type': 'application/javascript'
     },
     body: content
@@ -106,30 +116,28 @@ app.get('/api/cloudflare/workers/:name/logs', async (c) => {
 
 app.get('/api/cloudflare/workers', async (c) => {
   const accountId = c.req.header('X-CF-Account-ID')
-  const token = c.req.header('X-CF-Token')
-  if (!accountId || !token) return c.json({ error: 'Missing headers' }, 400)
+  if (!accountId) return c.json({ error: 'Missing account ID' }, 400)
 
   const response = await fetch("https://api.cloudflare.com/client/v4/accounts/" + accountId + "/workers/scripts", {
-    headers: { 'Authorization': "Bearer " + token }
+    headers: getCFHeaders(c)
   })
   return c.json(await response.json())
 })
 
 app.get('/api/cloudflare/dns', async (c) => {
-  const token = c.req.header('X-CF-Token')
-  if (!token) return c.json({ error: 'Missing headers' }, 400)
-
   const response = await fetch("https://api.cloudflare.com/client/v4/zones", {
-    headers: { 'Authorization': "Bearer " + token }
+    headers: getCFHeaders(c)
   })
   return c.json(await response.json())
 })
 
 app.get('/api/ai/chat', async (c) => {
   const prompt = c.req.query('prompt')
+  const apikey = c.req.header('X-AI-Key') || 'ak_37f62be0573d'
   if (!prompt) return c.json({ error: 'Missing prompt' }, 400)
 
-  const url = new URL('https://magma-api.biz.id/ai/gpt5')
+  const url = new URL('https://api-v3.ahem7553.workers.dev/api/gateway/copilot')
+  url.searchParams.append('apikey', apikey)
   url.searchParams.append('prompt', prompt)
 
   try {
@@ -137,20 +145,13 @@ app.get('/api/ai/chat', async (c) => {
     const text = await response.text()
 
     if (!response.ok) {
-        try {
-            const errJson = JSON.parse(text);
-            return c.json({ error: errJson.error || ("Error " + response.status) }, response.status as any)
-        } catch (e) {
-            return c.json({ error: "API Error " + response.status }, response.status as any)
-        }
+        return c.json({ error: "API Error " + response.status + ": " + text }, response.status as any)
     }
 
     try {
         const data = JSON.parse(text)
-        if (data.status && data.result && data.result.response) {
-            return c.json({ response: data.result.response })
-        }
-        return c.json(data)
+        const aiResponse = data.message || data.response || data.result || text
+        return c.json({ response: aiResponse })
     } catch (e) {
         return c.json({ response: text })
     }
@@ -195,12 +196,16 @@ app.get('/', (c) => {
                         <input id="cf-account-id" type="text" placeholder="Enter Account ID" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
                     <div class="space-y-2">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">Cloudflare API Token</label>
-                        <input id="cf-token" type="password" placeholder="Enter API Token" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">Cloudflare API Token / Key</label>
+                        <input id="cf-token" type="password" placeholder="Enter Token or Global API Key" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
                     <div class="space-y-2">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">AI API Key (Opsional)</label>
-                        <input id="ai-key" type="password" placeholder="Opsional" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">Cloudflare Email (Optional)</label>
+                        <input id="cf-email" type="email" placeholder="Required for Global API Key" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
+                    </div>
+                    <div class="space-y-2">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">AI API Key (Optional)</label>
+                        <input id="ai-key" type="password" placeholder="Default used if empty" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
 
                     <button onclick="handleLogin()" class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-500/20 transition-all transform active:scale-95 mt-4">
@@ -264,7 +269,6 @@ app.get('/', (c) => {
                         </div>
                     </div>
 
-                    <!-- System Log Section -->
                     <div class="border-t border-slate-800 flex flex-col transition-all duration-300 overflow-hidden" id="error-log-section" style="height: 40px;">
                         <button onclick="toggleErrorLog()" class="h-10 px-6 flex items-center justify-between hover:bg-slate-800/50 transition-colors w-full">
                             <div class="flex items-center gap-2">
@@ -289,7 +293,6 @@ app.get('/', (c) => {
                 <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 hidden transition-opacity duration-300"></div>
 
                 <section class="flex-grow flex flex-col bg-slate-950/30 relative overflow-hidden">
-                    <!-- Logs Section (Worker Specific Activity) -->
                     <div id="logs-container" class="hidden absolute top-0 left-0 right-0 h-48 glass z-20 border-b border-slate-800 flex flex-col transition-all duration-300 transform -translate-y-full">
                         <div class="px-4 py-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
                             <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Log Aktivasi AI</span>
@@ -365,7 +368,7 @@ app.get('/', (c) => {
             </div>
         </div>
 
-        <!-- Preview Modal (Pertinjau) -->
+        <!-- Preview Modal -->
         <div id="modal-preview" class="hidden fixed inset-0 bg-black/80 backdrop-blur-xl z-50 flex flex-col p-4">
             <div class="flex-grow flex flex-col glass rounded-3xl overflow-hidden shadow-2xl max-w-4xl mx-auto w-full">
                 <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-slate-900/50">
@@ -416,12 +419,16 @@ app.get('/', (c) => {
                         <input id="set-cf-account-id" type="text" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">API Token</label>
+                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">API Token / Key</label>
                         <input id="set-cf-token" type="password" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">AI Key (Opsional)</label>
-                        <input id="set-ai-key" type="password" placeholder="Opsional" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
+                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Cloudflare Email</label>
+                        <input id="set-cf-email" type="email" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">AI Key</label>
+                        <input id="set-ai-key" type="password" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
                     <button onclick="saveSettings()" class="w-full bg-blue-600 py-4 rounded-2xl font-bold mt-4 shadow-lg shadow-blue-500/20 active:scale-95 transition-all">Save Changes</button>
                 </div>
@@ -434,6 +441,7 @@ app.get('/', (c) => {
             const state = {
                 cfAccountId: localStorage.getItem('cfAccountId') || '',
                 cfToken: localStorage.getItem('cfToken') || '',
+                cfEmail: localStorage.getItem('cfEmail') || '',
                 aiKey: localStorage.getItem('aiKey') || '',
                 account: null,
                 workers: [],
@@ -468,9 +476,11 @@ app.get('/', (c) => {
                         const config = await res.json();
                         state.cfAccountId = config.cfAccountId;
                         state.cfToken = config.cfToken;
+                        state.cfEmail = config.cfEmail || '';
                         state.aiKey = config.aiKey;
                         localStorage.setItem('cfAccountId', state.cfAccountId);
                         localStorage.setItem('cfToken', state.cfToken);
+                        localStorage.setItem('cfEmail', state.cfEmail);
                         localStorage.setItem('aiKey', state.aiKey);
                     }
                 } catch (e) {}
@@ -486,6 +496,7 @@ app.get('/', (c) => {
                 document.getElementById('view-dashboard').classList.remove('hidden');
                 document.getElementById('set-cf-account-id').value = state.cfAccountId;
                 document.getElementById('set-cf-token').value = state.cfToken;
+                document.getElementById('set-cf-email').value = state.cfEmail;
                 document.getElementById('set-ai-key').value = state.aiKey;
                 await loadData();
             }
@@ -537,9 +548,7 @@ app.get('/', (c) => {
                 item.innerHTML = "<span class='opacity-50'>[" + time + "]</span> " + message;
                 list.appendChild(item);
                 list.scrollTop = list.scrollHeight;
-
                 if (isError) {
-                    // Auto expand on error
                     const section = document.getElementById('error-log-section');
                     if (section && section.style.height === '40px') window.toggleErrorLog();
                 }
@@ -569,8 +578,6 @@ app.get('/', (c) => {
                 if (!document.getElementById('modal-preview').classList.contains('hidden')) {
                     document.getElementById('preview-worker-name').textContent = 'Worker: ' + state.currentWorker;
                     document.getElementById('preview-code').textContent = state.lastGeneratedCode;
-
-                    // Suggest versioned name
                     if (state.currentWorker) {
                         const name = state.currentWorker;
                         const match = name.match(/_v(\d+)$/);
@@ -601,9 +608,11 @@ app.get('/', (c) => {
                 addSystemLog("Deploying worker: " + name + "...");
                 const code = state.lastGeneratedCode;
                 try {
+                    const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
+                    if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
                         method: 'PUT',
-                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken },
+                        headers: headers,
                         body: code
                     });
                     const data = await res.json();
@@ -627,11 +636,13 @@ app.get('/', (c) => {
             async function saveSettings() {
                 state.cfAccountId = document.getElementById('set-cf-account-id').value;
                 state.cfToken = document.getElementById('set-cf-token').value;
+                state.cfEmail = document.getElementById('set-cf-email').value;
                 state.aiKey = document.getElementById('set-ai-key').value;
                 const masterKey = localStorage.getItem('masterKey') || prompt("Masukkan Master Key untuk simpan ke R2:");
 
                 localStorage.setItem('cfAccountId', state.cfAccountId);
                 localStorage.setItem('cfToken', state.cfToken);
+                localStorage.setItem('cfEmail', state.cfEmail);
                 localStorage.setItem('aiKey', state.aiKey);
                 if (masterKey) localStorage.setItem('masterKey', masterKey);
 
@@ -643,6 +654,7 @@ app.get('/', (c) => {
                             body: JSON.stringify({
                                 cfAccountId: state.cfAccountId,
                                 cfToken: state.cfToken,
+                                cfEmail: state.cfEmail,
                                 aiKey: state.aiKey
                             })
                         });
@@ -655,6 +667,7 @@ app.get('/', (c) => {
             async function handleLogin() {
                 state.cfAccountId = document.getElementById('cf-account-id').value;
                 state.cfToken = document.getElementById('cf-token').value;
+                state.cfEmail = document.getElementById('cf-email').value;
                 state.aiKey = document.getElementById('ai-key').value;
 
                 if (!state.cfAccountId || !state.cfToken) {
@@ -666,6 +679,7 @@ app.get('/', (c) => {
 
                 localStorage.setItem('cfAccountId', state.cfAccountId);
                 localStorage.setItem('cfToken', state.cfToken);
+                localStorage.setItem('cfEmail', state.cfEmail);
                 localStorage.setItem('aiKey', state.aiKey);
                 if (masterKey) {
                     localStorage.setItem('masterKey', masterKey);
@@ -676,6 +690,7 @@ app.get('/', (c) => {
                             body: JSON.stringify({
                                 cfAccountId: state.cfAccountId,
                                 cfToken: state.cfToken,
+                                cfEmail: state.cfEmail,
                                 aiKey: state.aiKey
                             })
                         });
@@ -687,9 +702,9 @@ app.get('/', (c) => {
             async function loadData() {
                 addSystemLog("Menghubungkan ke Cloudflare...");
                 try {
-                    const accRes = await fetch('/api/cloudflare/account', {
-                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
-                    });
+                    const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
+                    if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
+                    const accRes = await fetch('/api/cloudflare/account', { headers: headers });
                     const accData = await accRes.json();
                     if (accData.result) {
                         state.account = accData.result;
@@ -697,7 +712,7 @@ app.get('/', (c) => {
                         document.getElementById('cf-account-id-display').textContent = 'ID: ' + state.account.id;
                         addSystemLog("Cloudflare terhubung: " + state.account.name);
                     } else {
-                        addSystemLog("Gagal memuat akun Cloudflare.", true);
+                        addSystemLog("CF Error: " + (accData.errors?.[0]?.message || 'Gagal memuat akun'), true);
                     }
                 } catch (e) {
                     addSystemLog("Error Cloudflare: " + e.message, true);
@@ -709,9 +724,9 @@ app.get('/', (c) => {
                 const content = document.getElementById('workers-list');
                 content.innerHTML = '<div class="flex justify-center py-4"><div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div></div>';
                 try {
-                    const res = await fetch('/api/cloudflare/workers', {
-                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
-                    });
+                    const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
+                    if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
+                    const res = await fetch('/api/cloudflare/workers', { headers: headers });
                     const data = await res.json();
                     state.workers = data.result || [];
                     content.innerHTML = state.workers.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4 uppercase font-bold tracking-tighter">None</p>';
@@ -731,9 +746,9 @@ app.get('/', (c) => {
                 const content = document.getElementById('dns-list');
                 content.innerHTML = '<div class="flex justify-center py-4"><div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div></div>';
                 try {
-                    const res = await fetch('/api/cloudflare/dns', {
-                        headers: { 'X-CF-Token': state.cfToken }
-                    });
+                    const headers = { 'X-CF-Token': state.cfToken };
+                    if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
+                    const res = await fetch('/api/cloudflare/dns', { headers: headers });
                     const data = await res.json();
                     state.dns = data.result || [];
                     content.innerHTML = state.dns.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4 uppercase font-bold tracking-tighter">None</p>';
@@ -757,23 +772,18 @@ app.get('/', (c) => {
                 toggleEditor();
                 toggleSidebar();
                 loadLogs(name);
-
                 try {
-                    const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
-                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
-                    });
+                    const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
+                    if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
+                    const res = await fetch("/api/cloudflare/workers/" + name + "/content", { headers: headers });
                     if (res.ok) {
                         codeArea.value = await res.text();
                     } else {
                         codeArea.value = '// Error fetching code from Cloudflare. Trying R2...';
                         const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
-                        if (r2res.ok) {
-                            codeArea.value = await r2res.text();
-                        }
+                        if (r2res.ok) codeArea.value = await r2res.text();
                     }
-                } catch (e) {
-                    codeArea.value = '// Error: ' + e.message;
-                }
+                } catch (e) { codeArea.value = '// Error: ' + e.message; }
             }
 
             async function saveToR2() {
@@ -793,9 +803,11 @@ app.get('/', (c) => {
                 const code = document.getElementById('worker-code').value;
                 if (!confirm('Deploy changes to Cloudflare?')) return;
                 try {
+                    const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
+                    if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
                         method: 'PUT',
-                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken },
+                        headers: headers,
                         body: code
                     });
                     const data = await res.json();
@@ -817,9 +829,7 @@ app.get('/', (c) => {
                         item.innerHTML = "<div class='text-slate-500 text-[8px]'>" + time + " - " + log.action.toUpperCase() + "</div><div class='text-slate-300'>" + (log.summary || 'No summary') + "</div>";
                         list.appendChild(item);
                     });
-                } catch (e) {
-                    list.innerHTML = '<div class="text-red-400">Gagal memuat log.</div>';
-                }
+                } catch (e) { list.innerHTML = '<div class="text-red-400">Gagal memuat log.</div>'; }
             }
 
             async function addLog(name, action, summary) {
@@ -835,42 +845,29 @@ app.get('/', (c) => {
 
             async function workerAction(type) {
                 const code = document.getElementById('worker-code').value;
-
-                // Auto-save to R2 before AI action
                 try {
                     await fetch("/api/cloudflare/workers/" + state.currentWorker + "/storage", {
                         method: 'POST',
                         body: code
                     });
-                } catch (e) {
-                    console.error("Auto-save to R2 failed", e);
-                }
+                } catch (e) {}
 
                 toggleEditor();
                 const bt = String.fromCharCode(96, 96, 96);
                 const nl = String.fromCharCode(10);
-                let p = "";
-                let icon = "";
-                let summary = "";
+                let p = ""; let icon = ""; let summary = "";
                 if (type === 'analyze') {
                     p = "Analisa kode worker berikut. Berikan penjelasan masalah yang ditemukan dan berikan saran perbaikan. Berikan kode lengkap yang sudah diperbaiki di dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
-                    icon = "🔍";
-                    summary = "Menganalisa kode untuk mencari masalah.";
-                }
-                else if (type === 'review') {
+                    icon = "🔍"; summary = "Menganalisa kode.";
+                } else if (type === 'review') {
                     p = "Review kode worker berikut secara mendalam. Cari bug, celah keamanan, atau inefisiensi. Jelaskan masalahnya secara detail, lalu berikan kode final yang sudah dioptimalkan dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
-                    icon = "🛡️";
-                    summary = "Melakukan review keamanan dan performa.";
-                }
-                else if (type === 'generate') {
+                    icon = "🛡️"; summary = "Melakukan review.";
+                } else if (type === 'generate') {
                     p = "Kembangkan fitur baru atau perbaiki kode worker berikut sesuai standar terbaik. Jika ini fitur baru, sarankan nama worker baru seperti 'workername_v2'. Jelaskan apa yang diubah dan mengapa, lalu berikan kode lengkapnya dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
-                    icon = "✨";
-                    summary = "Mengembangkan fitur baru / optimasi.";
+                    icon = "✨"; summary = "Mengembangkan fitur.";
                 }
-
                 const realPrompt = p + nl + nl + bt + "javascript" + nl + code + nl + bt;
                 const displayPrompt = icon + " " + type.toUpperCase() + ": " + state.currentWorker;
-
                 addLog(state.currentWorker, type, summary);
                 sendMessage(realPrompt, displayPrompt);
             }
@@ -879,18 +876,17 @@ app.get('/', (c) => {
                 const input = document.getElementById('chat-input');
                 const promptStr = overridePrompt || input.value.trim();
                 const displayStr = displayPrompt || promptStr;
-
                 if (!promptStr) return;
                 if (!overridePrompt) input.value = '';
-
                 appendMessage('user', displayStr);
                 const loadingId = 'loading-' + Date.now();
                 appendMessage('ai', 'Thinking...', loadingId);
                 addSystemLog("Menghubungkan ke AI...");
                 try {
-                    const res = await fetch("/api/ai/chat?prompt=" + encodeURIComponent(promptStr));
+                    const headers = {};
+                    if (state.aiKey) headers['X-AI-Key'] = state.aiKey;
+                    const res = await fetch("/api/ai/chat?prompt=" + encodeURIComponent(promptStr), { headers: headers });
                     const data = await res.json().catch(() => ({ error: 'Gagal memproses data AI.' }));
-
                     if (!res.ok) {
                         updateAIStatus(false);
                         addSystemLog("AI error: " + (data.error || res.status), true);
@@ -898,15 +894,11 @@ app.get('/', (c) => {
                     }
                     updateAIStatus(true);
                     addSystemLog("AI terhubung.");
-
                     const responseText = data.response || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
-
-                    // Extract code block
                     const bt = String.fromCharCode(96, 96, 96);
                     const codeMatch = responseText.split(bt + "javascript").pop().split(bt)[0];
                     const codeMatch2 = responseText.split(bt + "js").pop().split(bt)[0];
                     const codeMatch3 = responseText.split(bt).length > 2 ? responseText.split(bt)[1] : null;
-
                     let finalCode = "";
                     if (responseText.includes(bt + "javascript")) finalCode = codeMatch.trim();
                     else if (responseText.includes(bt + "js")) finalCode = codeMatch2.trim();
@@ -919,7 +911,6 @@ app.get('/', (c) => {
                         updateMessage(loadingId, responseText);
                     }
                 } catch (e) {
-                    console.error(e);
                     updateMessage(loadingId, 'Kesalahan: ' + (e.message || 'Gagal mendapatkan respon dari AI.'));
                 }
             }
@@ -929,12 +920,10 @@ app.get('/', (c) => {
                 const div = document.createElement('div');
                 div.className = "flex flex-col " + (role === 'user' ? 'items-end' : 'items-start');
                 if (id) div.id = id;
-
                 let html = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed whitespace-pre-wrap shadow-lg shadow-black/20'>" + text + "</div>";
                 if (hasCode) {
                     html += "<button onclick='window.togglePreview()' class='mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 transition-all flex items-center gap-2'><i class='fa-solid fa-eye'></i> PERTINJAU PERBAIKAN</button>";
                 }
-
                 div.innerHTML = html;
                 container.appendChild(div);
                 container.scrollTop = container.scrollHeight;
@@ -960,7 +949,6 @@ app.get('/', (c) => {
                 if (e.key === 'Enter') sendMessage();
             });
 
-            // Export to window
             window.state = state;
             window.syncFromR2 = syncFromR2;
             window.showLogin = showLogin;
