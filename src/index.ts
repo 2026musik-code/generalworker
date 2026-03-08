@@ -82,6 +82,28 @@ app.get('/api/cloudflare/workers/:name/storage', async (c) => {
   return new Response(obj.body, { headers: { 'Content-Type': 'text/javascript' } })
 })
 
+app.post('/api/cloudflare/workers/:name/logs', async (c) => {
+  const name = c.req.param('name')
+  const logEntry = await c.req.json()
+  const key = `logs_${name}`
+  const obj = await c.env.R2.get(key)
+  let logs = []
+  if (obj) {
+    try { logs = await obj.json() } catch (e) { logs = [] }
+  }
+  logs.push({ timestamp: new Date().toISOString(), ...logEntry })
+  if (logs.length > 50) logs = logs.slice(-50)
+  await c.env.R2.put(key, JSON.stringify(logs))
+  return c.json({ success: true })
+})
+
+app.get('/api/cloudflare/workers/:name/logs', async (c) => {
+  const name = c.req.param('name')
+  const obj = await c.env.R2.get(`logs_${name}`)
+  if (!obj) return c.json([])
+  return c.json(await obj.json())
+})
+
 app.get('/api/cloudflare/workers', async (c) => {
   const accountId = c.req.header('X-CF-Account-ID')
   const token = c.req.header('X-CF-Token')
@@ -253,6 +275,17 @@ app.get('/', (c) => {
                 <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 hidden transition-opacity duration-300"></div>
 
                 <section class="flex-grow flex flex-col bg-slate-950/30 relative overflow-hidden">
+                    <!-- Logs Section -->
+                    <div id="logs-container" class="hidden absolute top-0 left-0 right-0 h-48 glass z-20 border-b border-slate-800 flex flex-col transition-all duration-300 transform -translate-y-full">
+                        <div class="px-4 py-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                            <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Log Aktivasi AI</span>
+                            <button onclick="toggleLogs()" class="text-slate-500 hover:text-white"><i class="fa-solid fa-chevron-up"></i></button>
+                        </div>
+                        <div id="logs-list" class="flex-grow overflow-y-auto p-3 space-y-2 text-[10px] font-mono">
+                            <div class="text-slate-500 italic">Pilih worker untuk melihat log...</div>
+                        </div>
+                    </div>
+
                     <div id="chat-messages" class="flex-grow overflow-y-auto p-6 space-y-6 scroll-smooth">
                         <div class="flex justify-start">
                             <div class="max-w-[85%] glass rounded-2xl rounded-tl-none p-4 text-sm leading-relaxed shadow-lg">
@@ -261,7 +294,12 @@ app.get('/', (c) => {
                         </div>
                     </div>
 
-                    <div class="p-4 border-t border-slate-800 glass relative z-10">
+                    <div class="p-4 border-t border-slate-800 glass relative z-10 flex flex-col gap-2">
+                        <div class="flex justify-between items-center px-1">
+                            <button onclick="toggleLogs()" class="text-[10px] font-bold text-slate-500 hover:text-blue-400 flex items-center gap-1 transition-colors">
+                                <i class="fa-solid fa-clock-rotate-left"></i> LIHAT LOG AKTIVASI
+                            </button>
+                        </div>
                         <div class="flex items-center space-x-2">
                             <input id="chat-input" type="text" placeholder="Type a message..." class="flex-grow bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all">
                             <button onclick="sendMessage()" class="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20 active:scale-95 transition-all text-white">
@@ -325,9 +363,15 @@ app.get('/', (c) => {
                 </div>
 
                 <div class="flex-grow relative bg-slate-950/50 overflow-hidden flex flex-col">
-                    <div class="p-4 bg-slate-900/50 border-b border-slate-800 flex justify-between items-center">
-                        <span class="text-[10px] font-bold text-slate-400 uppercase">Generated Code</span>
-                        <button onclick="copyPreviewCode()" class="text-[10px] bg-slate-800 px-3 py-1 rounded-lg hover:bg-slate-700 transition-colors">Copy</button>
+                    <div class="p-4 bg-slate-900/50 border-b border-slate-800 flex flex-col gap-2">
+                        <div class="flex justify-between items-center">
+                            <span class="text-[10px] font-bold text-slate-400 uppercase">Generated Code</span>
+                            <button onclick="copyPreviewCode()" class="text-[10px] bg-slate-800 px-3 py-1 rounded-lg hover:bg-slate-700 transition-colors">Copy</button>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-[10px] font-bold text-slate-500 uppercase">Deploy Name:</label>
+                            <input id="preview-deploy-name" type="text" class="flex-grow bg-slate-800 border border-slate-700 rounded-lg px-3 py-1 text-xs text-slate-200">
+                        </div>
                     </div>
                     <pre id="preview-code" class="flex-grow overflow-auto p-6 font-mono text-xs text-blue-300 whitespace-pre scroll-smooth"></pre>
                 </div>
@@ -458,11 +502,35 @@ app.get('/', (c) => {
                 document.getElementById('modal-editor').classList.toggle('hidden');
             }
 
+            window.toggleLogs = function() {
+                const container = document.getElementById('logs-container');
+                const isHidden = container.classList.contains('hidden');
+                if (isHidden) {
+                    container.classList.remove('hidden');
+                    setTimeout(() => container.classList.remove('-translate-y-full'), 10);
+                } else {
+                    container.classList.add('-translate-y-full');
+                    setTimeout(() => container.classList.add('hidden'), 300);
+                }
+            }
+
             window.togglePreview = function() {
                 document.getElementById('modal-preview').classList.toggle('hidden');
                 if (!document.getElementById('modal-preview').classList.contains('hidden')) {
                     document.getElementById('preview-worker-name').textContent = 'Worker: ' + state.currentWorker;
                     document.getElementById('preview-code').textContent = state.lastGeneratedCode;
+
+                    // Suggest versioned name
+                    if (state.currentWorker) {
+                        const name = state.currentWorker;
+                        const match = name.match(/_v(\d+)$/);
+                        if (match) {
+                            const nextV = parseInt(match[1]) + 1;
+                            document.getElementById('preview-deploy-name').value = name.replace(/_v\d+$/, '_v' + nextV);
+                        } else {
+                            document.getElementById('preview-deploy-name').value = name + '_v2';
+                        }
+                    }
                 }
             }
 
@@ -478,8 +546,8 @@ app.get('/', (c) => {
             }
 
             window.deployPreview = async function() {
-                if (!confirm('Deploy code baru ke Cloudflare?')) return;
-                const name = state.currentWorker;
+                const name = document.getElementById('preview-deploy-name').value || state.currentWorker;
+                if (!confirm('Deploy code baru ke Cloudflare dengan nama "' + name + '"?')) return;
                 const code = state.lastGeneratedCode;
                 try {
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
@@ -489,8 +557,10 @@ app.get('/', (c) => {
                     });
                     const data = await res.json();
                     if (data.success) {
-                        alert('Deployed successfully!');
+                        alert('Deployed successfully as ' + name + '!');
+                        addLog(state.currentWorker, 'deploy', 'Deploy versi baru: ' + name);
                         window.togglePreview();
+                        loadWorkers();
                     } else {
                         alert('Deploy failed: ' + (data.errors?.[0]?.message || 'Unknown error'));
                     }
@@ -622,6 +692,7 @@ app.get('/', (c) => {
                 codeArea.value = 'Fetching code...';
                 toggleEditor();
                 toggleSidebar();
+                loadLogs(name);
 
                 try {
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
@@ -669,6 +740,35 @@ app.get('/', (c) => {
                 } catch (e) { alert('Error: ' + e.message); }
             }
 
+            async function loadLogs(name) {
+                const list = document.getElementById('logs-list');
+                try {
+                    const res = await fetch("/api/cloudflare/workers/" + name + "/logs");
+                    const logs = await res.json();
+                    list.innerHTML = logs.length ? '' : '<div class="text-slate-500 italic">Belum ada log aktivitas...</div>';
+                    logs.reverse().forEach(log => {
+                        const item = document.createElement('div');
+                        item.className = 'border-l-2 border-blue-500/30 pl-2 py-1';
+                        const time = new Date(log.timestamp).toLocaleTimeString();
+                        item.innerHTML = "<div class='text-slate-500 text-[8px]'>" + time + " - " + log.action.toUpperCase() + "</div><div class='text-slate-300'>" + (log.summary || 'No summary') + "</div>";
+                        list.appendChild(item);
+                    });
+                } catch (e) {
+                    list.innerHTML = '<div class="text-red-400">Gagal memuat log.</div>';
+                }
+            }
+
+            async function addLog(name, action, summary) {
+                try {
+                    await fetch("/api/cloudflare/workers/" + name + "/logs", {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action, summary })
+                    });
+                    if (state.currentWorker === name) loadLogs(name);
+                } catch (e) {}
+            }
+
             async function workerAction(type) {
                 const code = document.getElementById('worker-code').value;
 
@@ -687,13 +787,27 @@ app.get('/', (c) => {
                 const nl = String.fromCharCode(10);
                 let p = "";
                 let icon = "";
-                if (type === 'analyze') { p = "Analisa kode worker berikut. Berikan penjelasan masalah yang ditemukan dan berikan saran perbaikan. Berikan kode lengkap yang sudah diperbaiki di dalam blok kode markdown (" + bt + "javascript ... " + bt + "):"; icon = "🔍"; }
-                else if (type === 'review') { p = "Review kode worker berikut secara mendalam. Cari bug, celah keamanan, atau inefisiensi. Jelaskan masalahnya secara detail, lalu berikan kode final yang sudah dioptimalkan dalam blok kode markdown (" + bt + "javascript ... " + bt + "):"; icon = "🛡️"; }
-                else if (type === 'generate') { p = "Kembangkan fitur baru atau perbaiki kode worker berikut sesuai standar terbaik. Jelaskan apa yang diubah dan mengapa, lalu berikan kode lengkapnya dalam blok kode markdown (" + bt + "javascript ... " + bt + "):"; icon = "✨"; }
+                let summary = "";
+                if (type === 'analyze') {
+                    p = "Analisa kode worker berikut. Berikan penjelasan masalah yang ditemukan dan berikan saran perbaikan. Berikan kode lengkap yang sudah diperbaiki di dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
+                    icon = "🔍";
+                    summary = "Menganalisa kode untuk mencari masalah.";
+                }
+                else if (type === 'review') {
+                    p = "Review kode worker berikut secara mendalam. Cari bug, celah keamanan, atau inefisiensi. Jelaskan masalahnya secara detail, lalu berikan kode final yang sudah dioptimalkan dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
+                    icon = "🛡️";
+                    summary = "Melakukan review keamanan dan performa.";
+                }
+                else if (type === 'generate') {
+                    p = "Kembangkan fitur baru atau perbaiki kode worker berikut sesuai standar terbaik. Jika ini fitur baru, sarankan nama worker baru seperti 'workername_v2'. Jelaskan apa yang diubah dan mengapa, lalu berikan kode lengkapnya dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
+                    icon = "✨";
+                    summary = "Mengembangkan fitur baru / optimasi.";
+                }
 
                 const realPrompt = p + nl + nl + bt + "javascript" + nl + code + nl + bt;
                 const displayPrompt = icon + " " + type.toUpperCase() + ": " + state.currentWorker;
 
+                addLog(state.currentWorker, type, summary);
                 sendMessage(realPrompt, displayPrompt);
             }
 
