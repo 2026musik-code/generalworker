@@ -87,9 +87,9 @@ app.post('/api/cloudflare/workers/:name/logs', async (c) => {
   const logEntry = await c.req.json()
   const key = `logs_${name}`
   const obj = await c.env.R2.get(key)
-  let logs = []
+  let logs: any[] = []
   if (obj) {
-    try { logs = await obj.json() } catch (e) { logs = [] }
+    try { logs = await obj.json() as any[] } catch (e) { logs = [] }
   }
   logs.push({ timestamp: new Date().toISOString(), ...logEntry })
   if (logs.length > 50) logs = logs.slice(-50)
@@ -264,6 +264,20 @@ app.get('/', (c) => {
                         </div>
                     </div>
 
+                    <!-- System Log Section -->
+                    <div class="border-t border-slate-800 flex flex-col transition-all duration-300 overflow-hidden" id="error-log-section" style="height: 40px;">
+                        <button onclick="toggleErrorLog()" class="h-10 px-6 flex items-center justify-between hover:bg-slate-800/50 transition-colors w-full">
+                            <div class="flex items-center gap-2">
+                                <div id="ai-connection-status" class="w-2 h-2 rounded-full bg-slate-500"></div>
+                                <span class="text-[9px] font-black uppercase tracking-widest text-slate-400">Log Koneksi & Error</span>
+                            </div>
+                            <i id="error-log-chevron" class="fa-solid fa-chevron-up text-[10px] text-slate-500 transition-transform"></i>
+                        </button>
+                        <div id="error-log-list" class="flex-grow overflow-y-auto p-4 space-y-2 text-[9px] font-mono bg-black/20">
+                            <div class="text-slate-500 italic">Sistem siap...</div>
+                        </div>
+                    </div>
+
                     <div class="p-6 border-t border-slate-800">
                         <button onclick="logout()" class="w-full flex items-center justify-center space-x-2 py-4 rounded-2xl bg-red-500/10 text-red-500 text-xs font-black tracking-widest hover:bg-red-500/20 transition-all">
                             <i class="fa-solid fa-right-from-bracket"></i>
@@ -275,7 +289,7 @@ app.get('/', (c) => {
                 <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 hidden transition-opacity duration-300"></div>
 
                 <section class="flex-grow flex flex-col bg-slate-950/30 relative overflow-hidden">
-                    <!-- Logs Section -->
+                    <!-- Logs Section (Worker Specific Activity) -->
                     <div id="logs-container" class="hidden absolute top-0 left-0 right-0 h-48 glass z-20 border-b border-slate-800 flex flex-col transition-all duration-300 transform -translate-y-full">
                         <div class="px-4 py-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
                             <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Log Aktivasi AI</span>
@@ -502,6 +516,42 @@ app.get('/', (c) => {
                 document.getElementById('modal-editor').classList.toggle('hidden');
             }
 
+            window.toggleErrorLog = function() {
+                const section = document.getElementById('error-log-section');
+                const chevron = document.getElementById('error-log-chevron');
+                const isCollapsed = section.style.height === '40px';
+                if (isCollapsed) {
+                    section.style.height = '200px';
+                    chevron.classList.add('rotate-180');
+                } else {
+                    section.style.height = '40px';
+                    chevron.classList.remove('rotate-180');
+                }
+            }
+
+            window.addSystemLog = function(message, isError = false) {
+                const list = document.getElementById('error-log-list');
+                const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                const item = document.createElement('div');
+                item.className = isError ? 'text-red-400' : 'text-slate-400';
+                item.innerHTML = "<span class='opacity-50'>[" + time + "]</span> " + message;
+                list.appendChild(item);
+                list.scrollTop = list.scrollHeight;
+
+                if (isError) {
+                    // Auto expand on error
+                    const section = document.getElementById('error-log-section');
+                    if (section && section.style.height === '40px') window.toggleErrorLog();
+                }
+            }
+
+            window.updateAIStatus = function(isConnected) {
+                const dot = document.getElementById('ai-connection-status');
+                if (dot) {
+                    dot.className = "w-2 h-2 rounded-full " + (isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500');
+                }
+            }
+
             window.toggleLogs = function() {
                 const container = document.getElementById('logs-container');
                 const isHidden = container.classList.contains('hidden');
@@ -548,6 +598,7 @@ app.get('/', (c) => {
             window.deployPreview = async function() {
                 const name = document.getElementById('preview-deploy-name').value || state.currentWorker;
                 if (!confirm('Deploy code baru ke Cloudflare dengan nama "' + name + '"?')) return;
+                addSystemLog("Deploying worker: " + name + "...");
                 const code = state.lastGeneratedCode;
                 try {
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
@@ -557,14 +608,20 @@ app.get('/', (c) => {
                     });
                     const data = await res.json();
                     if (data.success) {
+                        addSystemLog("Deploy sukses: " + name);
                         alert('Deployed successfully as ' + name + '!');
                         addLog(state.currentWorker, 'deploy', 'Deploy versi baru: ' + name);
                         window.togglePreview();
                         loadWorkers();
                     } else {
-                        alert('Deploy failed: ' + (data.errors?.[0]?.message || 'Unknown error'));
+                        const errMsg = data.errors?.[0]?.message || 'Unknown error';
+                        addSystemLog("Deploy gagal: " + errMsg, true);
+                        alert('Deploy failed: ' + errMsg);
                     }
-                } catch (e) { alert('Error: ' + e.message); }
+                } catch (e) {
+                    addSystemLog("Deploy error: " + e.message, true);
+                    alert('Error: ' + e.message);
+                }
             }
 
             async function saveSettings() {
@@ -628,6 +685,7 @@ app.get('/', (c) => {
             }
 
             async function loadData() {
+                addSystemLog("Menghubungkan ke Cloudflare...");
                 try {
                     const accRes = await fetch('/api/cloudflare/account', {
                         headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
@@ -637,8 +695,13 @@ app.get('/', (c) => {
                         state.account = accData.result;
                         document.getElementById('cf-account-name').textContent = state.account.name;
                         document.getElementById('cf-account-id-display').textContent = 'ID: ' + state.account.id;
+                        addSystemLog("Cloudflare terhubung: " + state.account.name);
+                    } else {
+                        addSystemLog("Gagal memuat akun Cloudflare.", true);
                     }
-                } catch (e) {}
+                } catch (e) {
+                    addSystemLog("Error Cloudflare: " + e.message, true);
+                }
                 await Promise.all([loadWorkers(), loadDNS()]);
             }
 
@@ -686,6 +749,7 @@ app.get('/', (c) => {
             }
 
             async function openWorker(name) {
+                addSystemLog("Membuka worker: " + name);
                 state.currentWorker = name;
                 document.getElementById('editor-worker-name').textContent = name;
                 const codeArea = document.getElementById('worker-code');
@@ -822,13 +886,18 @@ app.get('/', (c) => {
                 appendMessage('user', displayStr);
                 const loadingId = 'loading-' + Date.now();
                 appendMessage('ai', 'Thinking...', loadingId);
+                addSystemLog("Menghubungkan ke AI...");
                 try {
                     const res = await fetch("/api/ai/chat?prompt=" + encodeURIComponent(promptStr));
                     const data = await res.json().catch(() => ({ error: 'Gagal memproses data AI.' }));
 
                     if (!res.ok) {
+                        updateAIStatus(false);
+                        addSystemLog("AI error: " + (data.error || res.status), true);
                         throw new Error(data.error || "Gagal mendapatkan respon dari AI.");
                     }
+                    updateAIStatus(true);
+                    addSystemLog("AI terhubung.");
 
                     const responseText = data.response || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
 
@@ -900,6 +969,14 @@ app.get('/', (c) => {
             window.toggleSidebar = toggleSidebar;
             window.toggleSettings = toggleSettings;
             window.toggleEditor = toggleEditor;
+            window.toggleErrorLog = toggleErrorLog;
+            window.addSystemLog = addSystemLog;
+            window.updateAIStatus = updateAIStatus;
+            window.toggleLogs = toggleLogs;
+            window.togglePreview = togglePreview;
+            window.copyPreviewCode = copyPreviewCode;
+            window.applyPreview = applyPreview;
+            window.deployPreview = deployPreview;
             window.saveSettings = saveSettings;
             window.handleLogin = handleLogin;
             window.loadData = loadData;
