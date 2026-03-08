@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { html } from 'hono/html'
 
 type Bindings = {
-  R2: R2Bucket
+  R2: R2Bucket;
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -136,14 +136,25 @@ app.get('/api/ai/chat', async (c) => {
   const apikey = c.req.header('X-AI-Key') || 'ak_37f62be0573d'
   if (!prompt) return c.json({ error: 'Missing prompt' }, 400)
 
-  const url = new URL('https://api-v3.ahem7553.workers.dev/api/gateway/copilot')
-  url.searchParams.append('apikey', apikey)
-  url.searchParams.append('prompt', prompt)
+  const baseUrl = 'https://api-v3.ahem7553.workers.dev/api/gateway/copilot'
 
   try {
-    const response = await fetch(url.toString())
-    const text = await response.text()
+    // Try POST first for reliability with large payloads
+    let response = await fetch(baseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apikey, prompt })
+    })
 
+    if (response.status === 404 || response.status === 405) {
+        // Fallback to GET if POST is not supported
+        const url = new URL(baseUrl)
+        url.searchParams.append('apikey', apikey)
+        url.searchParams.append('prompt', prompt)
+        response = await fetch(url.toString())
+    }
+
+    const text = await response.text()
     if (!response.ok) {
         return c.json({ error: "API Error " + response.status + ": " + text }, response.status as any)
     }
@@ -269,6 +280,7 @@ app.get('/', (c) => {
                         </div>
                     </div>
 
+                    <!-- System Log Section -->
                     <div class="border-t border-slate-800 flex flex-col transition-all duration-300 overflow-hidden" id="error-log-section" style="height: 40px;">
                         <button onclick="toggleErrorLog()" class="h-10 px-6 flex items-center justify-between hover:bg-slate-800/50 transition-colors w-full">
                             <div class="flex items-center gap-2">
@@ -293,6 +305,7 @@ app.get('/', (c) => {
                 <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 hidden transition-opacity duration-300"></div>
 
                 <section class="flex-grow flex flex-col bg-slate-950/30 relative overflow-hidden">
+                    <!-- Logs Section (Worker Specific Activity) -->
                     <div id="logs-container" class="hidden absolute top-0 left-0 right-0 h-48 glass z-20 border-b border-slate-800 flex flex-col transition-all duration-300 transform -translate-y-full">
                         <div class="px-4 py-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
                             <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Log Aktivasi AI</span>
@@ -527,10 +540,10 @@ app.get('/', (c) => {
                 document.getElementById('modal-editor').classList.toggle('hidden');
             }
 
-            window.toggleErrorLog = function() {
+            function toggleErrorLog() {
                 const section = document.getElementById('error-log-section');
                 const chevron = document.getElementById('error-log-chevron');
-                const isCollapsed = section.style.height === '40px';
+                const isCollapsed = section.style.height === '40px' || section.style.height === '';
                 if (isCollapsed) {
                     section.style.height = '200px';
                     chevron.classList.add('rotate-180');
@@ -540,7 +553,7 @@ app.get('/', (c) => {
                 }
             }
 
-            window.addSystemLog = function(message, isError = false) {
+            function addSystemLog(message, isError = false) {
                 const list = document.getElementById('error-log-list');
                 const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
                 const item = document.createElement('div');
@@ -550,18 +563,18 @@ app.get('/', (c) => {
                 list.scrollTop = list.scrollHeight;
                 if (isError) {
                     const section = document.getElementById('error-log-section');
-                    if (section && section.style.height === '40px') window.toggleErrorLog();
+                    if (section && (section.style.height === '40px' || section.style.height === '')) toggleErrorLog();
                 }
             }
 
-            window.updateAIStatus = function(isConnected) {
+            function updateAIStatus(isConnected) {
                 const dot = document.getElementById('ai-connection-status');
                 if (dot) {
                     dot.className = "w-2 h-2 rounded-full " + (isConnected ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500');
                 }
             }
 
-            window.toggleLogs = function() {
+            function toggleLogs() {
                 const container = document.getElementById('logs-container');
                 const isHidden = container.classList.contains('hidden');
                 if (isHidden) {
@@ -573,9 +586,10 @@ app.get('/', (c) => {
                 }
             }
 
-            window.togglePreview = function() {
-                document.getElementById('modal-preview').classList.toggle('hidden');
-                if (!document.getElementById('modal-preview').classList.contains('hidden')) {
+            function togglePreview() {
+                const modal = document.getElementById('modal-preview');
+                modal.classList.toggle('hidden');
+                if (!modal.classList.contains('hidden')) {
                     document.getElementById('preview-worker-name').textContent = 'Worker: ' + state.currentWorker;
                     document.getElementById('preview-code').textContent = state.lastGeneratedCode;
                     if (state.currentWorker) {
@@ -591,18 +605,18 @@ app.get('/', (c) => {
                 }
             }
 
-            window.copyPreviewCode = function() {
+            function copyPreviewCode() {
                 navigator.clipboard.writeText(state.lastGeneratedCode);
                 alert('Copied to clipboard');
             }
 
-            window.applyPreview = function() {
+            function applyPreview() {
                 document.getElementById('worker-code').value = state.lastGeneratedCode;
-                window.togglePreview();
+                togglePreview();
                 document.getElementById('modal-editor').classList.remove('hidden');
             }
 
-            window.deployPreview = async function() {
+            async function deployPreview() {
                 const name = document.getElementById('preview-deploy-name').value || state.currentWorker;
                 if (!confirm('Deploy code baru ke Cloudflare dengan nama "' + name + '"?')) return;
                 addSystemLog("Deploying worker: " + name + "...");
@@ -620,7 +634,7 @@ app.get('/', (c) => {
                         addSystemLog("Deploy sukses: " + name);
                         alert('Deployed successfully as ' + name + '!');
                         addLog(state.currentWorker, 'deploy', 'Deploy versi baru: ' + name);
-                        window.togglePreview();
+                        togglePreview();
                         loadWorkers();
                     } else {
                         const errMsg = data.errors?.[0]?.message || 'Unknown error';
@@ -706,13 +720,19 @@ app.get('/', (c) => {
                     if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
                     const accRes = await fetch('/api/cloudflare/account', { headers: headers });
                     const accData = await accRes.json();
+
                     if (accData.result) {
                         state.account = accData.result;
                         document.getElementById('cf-account-name').textContent = state.account.name;
                         document.getElementById('cf-account-id-display').textContent = 'ID: ' + state.account.id;
                         addSystemLog("Cloudflare terhubung: " + state.account.name);
                     } else {
-                        addSystemLog("CF Error: " + (accData.errors?.[0]?.message || 'Gagal memuat akun'), true);
+                        const err = accData.errors?.[0] || {};
+                        let msg = err.message || 'Gagal memuat akun';
+                        if (err.code === 10000 && !state.cfEmail) {
+                            msg = "API Token ditolak (GET). Gunakan 'Global API Key' + Email di Settings.";
+                        }
+                        addSystemLog("CF Error " + (err.code || '') + ": " + msg, true);
                     }
                 } catch (e) {
                     addSystemLog("Error Cloudflare: " + e.message, true);
@@ -857,7 +877,7 @@ app.get('/', (c) => {
                 const nl = String.fromCharCode(10);
                 let p = ""; let icon = ""; let summary = "";
                 if (type === 'analyze') {
-                    p = "Analisa kode worker berikut. Berikan penjelasan masalah yang ditemukan dan berikan saran perbaikan. Berikan kode lengkap yang sudah diperbaiki di dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
+                    p = "Analisa kode worker berikut. Berikan penjelasan masalah yang ditemukan and berikan saran perbaikan. Berikan kode lengkap yang sudah diperbaiki di dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
                     icon = "🔍"; summary = "Menganalisa kode.";
                 } else if (type === 'review') {
                     p = "Review kode worker berikut secara mendalam. Cari bug, celah keamanan, atau inefisiensi. Jelaskan masalahnya secara detail, lalu berikan kode final yang sudah dioptimalkan dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
@@ -920,11 +940,11 @@ app.get('/', (c) => {
                 const div = document.createElement('div');
                 div.className = "flex flex-col " + (role === 'user' ? 'items-end' : 'items-start');
                 if (id) div.id = id;
-                let html = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed whitespace-pre-wrap shadow-lg shadow-black/20'>" + text + "</div>";
+                let htmlStr = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed whitespace-pre-wrap shadow-lg shadow-black/20'>" + text + "</div>";
                 if (hasCode) {
-                    html += "<button onclick='window.togglePreview()' class='mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 transition-all flex items-center gap-2'><i class='fa-solid fa-eye'></i> PERTINJAU PERBAIKAN</button>";
+                    htmlStr += "<button onclick='togglePreview()' class='mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 transition-all flex items-center gap-2'><i class='fa-solid fa-eye'></i> PERTINJAU PERBAIKAN</button>";
                 }
-                div.innerHTML = html;
+                div.innerHTML = htmlStr;
                 container.appendChild(div);
                 container.scrollTop = container.scrollHeight;
             }
@@ -935,7 +955,7 @@ app.get('/', (c) => {
                     div.querySelector('div').textContent = text;
                     if (hasCode && !div.querySelector('button')) {
                         const btn = document.createElement('button');
-                        btn.onclick = () => window.togglePreview();
+                        btn.onclick = () => togglePreview();
                         btn.className = 'mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 transition-all flex items-center gap-2';
                         btn.innerHTML = "<i class='fa-solid fa-eye'></i> PERTINJAU PERBAIKAN";
                         div.appendChild(btn);
@@ -949,34 +969,23 @@ app.get('/', (c) => {
                 if (e.key === 'Enter') sendMessage();
             });
 
-            window.state = state;
-            window.syncFromR2 = syncFromR2;
-            window.showLogin = showLogin;
-            window.showDashboard = showDashboard;
-            window.logout = logout;
+            // Export to window
+            window.handleLogin = handleLogin;
             window.toggleSidebar = toggleSidebar;
             window.toggleSettings = toggleSettings;
+            window.logout = logout;
+            window.sendMessage = sendMessage;
             window.toggleEditor = toggleEditor;
-            window.toggleErrorLog = toggleErrorLog;
-            window.addSystemLog = addSystemLog;
-            window.updateAIStatus = updateAIStatus;
-            window.toggleLogs = toggleLogs;
+            window.workerAction = workerAction;
+            window.saveToR2 = saveToR2;
+            window.deployWorker = deployWorker;
             window.togglePreview = togglePreview;
             window.copyPreviewCode = copyPreviewCode;
             window.applyPreview = applyPreview;
             window.deployPreview = deployPreview;
             window.saveSettings = saveSettings;
-            window.handleLogin = handleLogin;
-            window.loadData = loadData;
-            window.loadWorkers = loadWorkers;
-            window.loadDNS = loadDNS;
-            window.openWorker = openWorker;
-            window.saveToR2 = saveToR2;
-            window.deployWorker = deployWorker;
-            window.workerAction = workerAction;
-            window.sendMessage = sendMessage;
-            window.appendMessage = appendMessage;
-            window.updateMessage = updateMessage;
+            window.toggleLogs = toggleLogs;
+            window.toggleErrorLog = toggleErrorLog;
 
             init();
         })();
