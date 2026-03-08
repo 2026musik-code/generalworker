@@ -313,6 +313,38 @@ app.get('/', (c) => {
             </div>
         </div>
 
+        <!-- Preview Modal (Pertinjau) -->
+        <div id="modal-preview" class="hidden fixed inset-0 bg-black/80 backdrop-blur-xl z-50 flex flex-col p-4">
+            <div class="flex-grow flex flex-col glass rounded-3xl overflow-hidden shadow-2xl max-w-4xl mx-auto w-full">
+                <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-slate-900/50">
+                    <div class="flex flex-col">
+                        <span class="font-bold text-sm">Pertinjau Perbaikan</span>
+                        <span id="preview-worker-name" class="text-[10px] text-slate-500 uppercase font-black tracking-widest">Worker: ...</span>
+                    </div>
+                    <button onclick="togglePreview()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+
+                <div class="flex-grow relative bg-slate-950/50 overflow-hidden flex flex-col">
+                    <div class="p-4 bg-slate-900/50 border-b border-slate-800 flex justify-between items-center">
+                        <span class="text-[10px] font-bold text-slate-400 uppercase">Generated Code</span>
+                        <button onclick="copyPreviewCode()" class="text-[10px] bg-slate-800 px-3 py-1 rounded-lg hover:bg-slate-700 transition-colors">Copy</button>
+                    </div>
+                    <pre id="preview-code" class="flex-grow overflow-auto p-6 font-mono text-xs text-blue-300 whitespace-pre scroll-smooth"></pre>
+                </div>
+
+                <div class="p-4 border-t border-slate-800 glass flex gap-3">
+                    <button onclick="applyPreview()" class="flex-grow flex items-center justify-center space-x-2 py-4 rounded-2xl bg-white/5 text-white text-xs font-black tracking-widest hover:bg-white/10 transition-all border border-white/10">
+                        <i class="fa-solid fa-file-import"></i>
+                        <span>APPLY TO EDITOR</span>
+                    </button>
+                    <button onclick="deployPreview()" class="flex-grow flex items-center justify-center space-x-2 py-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-black tracking-widest hover:from-blue-500 hover:to-indigo-500 transition-all shadow-lg shadow-blue-500/20">
+                        <i class="fa-solid fa-bolt"></i>
+                        <span>DEPLOY NOW</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Settings Modal -->
         <div id="modal-settings" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-6">
             <div class="w-full max-w-sm glass rounded-3xl p-8 shadow-2xl">
@@ -349,7 +381,8 @@ app.get('/', (c) => {
                 workers: [],
                 dns: [],
                 sidebarOpen: false,
-                currentWorker: null
+                currentWorker: null,
+                lastGeneratedCode: ''
             };
 
             async function init() {
@@ -423,6 +456,45 @@ app.get('/', (c) => {
 
             function toggleEditor() {
                 document.getElementById('modal-editor').classList.toggle('hidden');
+            }
+
+            window.togglePreview = function() {
+                document.getElementById('modal-preview').classList.toggle('hidden');
+                if (!document.getElementById('modal-preview').classList.contains('hidden')) {
+                    document.getElementById('preview-worker-name').textContent = 'Worker: ' + state.currentWorker;
+                    document.getElementById('preview-code').textContent = state.lastGeneratedCode;
+                }
+            }
+
+            window.copyPreviewCode = function() {
+                navigator.clipboard.writeText(state.lastGeneratedCode);
+                alert('Copied to clipboard');
+            }
+
+            window.applyPreview = function() {
+                document.getElementById('worker-code').value = state.lastGeneratedCode;
+                window.togglePreview();
+                document.getElementById('modal-editor').classList.remove('hidden');
+            }
+
+            window.deployPreview = async function() {
+                if (!confirm('Deploy code baru ke Cloudflare?')) return;
+                const name = state.currentWorker;
+                const code = state.lastGeneratedCode;
+                try {
+                    const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
+                        method: 'PUT',
+                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken },
+                        body: code
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        alert('Deployed successfully!');
+                        window.togglePreview();
+                    } else {
+                        alert('Deploy failed: ' + (data.errors?.[0]?.message || 'Unknown error'));
+                    }
+                } catch (e) { alert('Error: ' + e.message); }
             }
 
             async function saveSettings() {
@@ -599,24 +671,41 @@ app.get('/', (c) => {
 
             async function workerAction(type) {
                 const code = document.getElementById('worker-code').value;
+
+                // Auto-save to R2 before AI action
+                try {
+                    await fetch("/api/cloudflare/workers/" + state.currentWorker + "/storage", {
+                        method: 'POST',
+                        body: code
+                    });
+                } catch (e) {
+                    console.error("Auto-save to R2 failed", e);
+                }
+
                 toggleEditor();
                 const bt = String.fromCharCode(96, 96, 96);
                 const nl = String.fromCharCode(10);
                 let p = "";
-                if (type === 'analyze') p = "Analisa kode worker berikut dan jelaskan fungsinya:";
-                else if (type === 'review') p = "Review kode worker berikut, cari bug atau celah keamanan, dan berikan saran perbaikan:";
-                else if (type === 'generate') p = "Tolong perbaiki atau kembangkan fitur baru untuk kode worker ini dan berikan kodenya:";
+                let icon = "";
+                if (type === 'analyze') { p = "Analisa kode worker berikut. Berikan penjelasan masalah yang ditemukan dan berikan saran perbaikan. Berikan kode lengkap yang sudah diperbaiki di dalam blok kode markdown (" + bt + "javascript ... " + bt + "):"; icon = "🔍"; }
+                else if (type === 'review') { p = "Review kode worker berikut secara mendalam. Cari bug, celah keamanan, atau inefisiensi. Jelaskan masalahnya secara detail, lalu berikan kode final yang sudah dioptimalkan dalam blok kode markdown (" + bt + "javascript ... " + bt + "):"; icon = "🛡️"; }
+                else if (type === 'generate') { p = "Kembangkan fitur baru atau perbaiki kode worker berikut sesuai standar terbaik. Jelaskan apa yang diubah dan mengapa, lalu berikan kode lengkapnya dalam blok kode markdown (" + bt + "javascript ... " + bt + "):"; icon = "✨"; }
 
-                document.getElementById('chat-input').value = p + nl + nl + bt + "javascript" + nl + code + nl + bt;
-                sendMessage();
+                const realPrompt = p + nl + nl + bt + "javascript" + nl + code + nl + bt;
+                const displayPrompt = icon + " " + type.toUpperCase() + ": " + state.currentWorker;
+
+                sendMessage(realPrompt, displayPrompt);
             }
 
-            async function sendMessage() {
+            async function sendMessage(overridePrompt = null, displayPrompt = null) {
                 const input = document.getElementById('chat-input');
-                const promptStr = input.value.trim();
+                const promptStr = overridePrompt || input.value.trim();
+                const displayStr = displayPrompt || promptStr;
+
                 if (!promptStr) return;
-                input.value = '';
-                appendMessage('user', promptStr);
+                if (!overridePrompt) input.value = '';
+
+                appendMessage('user', displayStr);
                 const loadingId = 'loading-' + Date.now();
                 appendMessage('ai', 'Thinking...', loadingId);
                 try {
@@ -628,27 +717,57 @@ app.get('/', (c) => {
                     }
 
                     const responseText = data.response || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
-                    updateMessage(loadingId, responseText);
+
+                    // Extract code block
+                    const bt = String.fromCharCode(96, 96, 96);
+                    const codeMatch = responseText.split(bt + "javascript").pop().split(bt)[0];
+                    const codeMatch2 = responseText.split(bt + "js").pop().split(bt)[0];
+                    const codeMatch3 = responseText.split(bt).length > 2 ? responseText.split(bt)[1] : null;
+
+                    let finalCode = "";
+                    if (responseText.includes(bt + "javascript")) finalCode = codeMatch.trim();
+                    else if (responseText.includes(bt + "js")) finalCode = codeMatch2.trim();
+                    else if (codeMatch3) finalCode = codeMatch3.trim();
+
+                    if (finalCode) {
+                        state.lastGeneratedCode = finalCode;
+                        updateMessage(loadingId, responseText, true);
+                    } else {
+                        updateMessage(loadingId, responseText);
+                    }
                 } catch (e) {
                     console.error(e);
                     updateMessage(loadingId, 'Kesalahan: ' + (e.message || 'Gagal mendapatkan respon dari AI.'));
                 }
             }
 
-            function appendMessage(role, text, id = null) {
+            function appendMessage(role, text, id = null, hasCode = false) {
                 const container = document.getElementById('chat-messages');
                 const div = document.createElement('div');
-                div.className = "flex " + (role === 'user' ? 'justify-end' : 'justify-start');
+                div.className = "flex flex-col " + (role === 'user' ? 'items-end' : 'items-start');
                 if (id) div.id = id;
-                div.innerHTML = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed whitespace-pre-wrap shadow-lg shadow-black/20'>" + text + "</div>";
+
+                let html = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed whitespace-pre-wrap shadow-lg shadow-black/20'>" + text + "</div>";
+                if (hasCode) {
+                    html += "<button onclick='window.togglePreview()' class='mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 transition-all flex items-center gap-2'><i class='fa-solid fa-eye'></i> PERTINJAU PERBAIKAN</button>";
+                }
+
+                div.innerHTML = html;
                 container.appendChild(div);
                 container.scrollTop = container.scrollHeight;
             }
 
-            function updateMessage(id, text) {
+            function updateMessage(id, text, hasCode = false) {
                 const div = document.getElementById(id);
                 if (div) {
                     div.querySelector('div').textContent = text;
+                    if (hasCode && !div.querySelector('button')) {
+                        const btn = document.createElement('button');
+                        btn.onclick = () => window.togglePreview();
+                        btn.className = 'mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 transition-all flex items-center gap-2';
+                        btn.innerHTML = "<i class='fa-solid fa-eye'></i> PERTINJAU PERBAIKAN";
+                        div.appendChild(btn);
+                    }
                     const container = document.getElementById('chat-messages');
                     container.scrollTop = container.scrollHeight;
                 }
