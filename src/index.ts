@@ -340,323 +340,348 @@ app.get('/', (c) => {
     </div>
 
     <script>
-        window.state = {
-            cfAccountId: localStorage.getItem('cfAccountId') || '',
-            cfToken: localStorage.getItem('cfToken') || '',
-            aiKey: localStorage.getItem('aiKey') || '',
-            account: null,
-            workers: [],
-            dns: [],
-            sidebarOpen: false,
-            currentWorker: null
-        };
+        (function() {
+            const state = {
+                cfAccountId: localStorage.getItem('cfAccountId') || '',
+                cfToken: localStorage.getItem('cfToken') || '',
+                aiKey: localStorage.getItem('aiKey') || '',
+                account: null,
+                workers: [],
+                dns: [],
+                sidebarOpen: false,
+                currentWorker: null
+            };
 
-        async function init() {
-            if (!state.cfAccountId) {
-                const masterKey = prompt("Masukkan Master Key untuk mengambil data dari R2:");
+            async function init() {
+                if (!state.cfAccountId) {
+                    const masterKey = prompt("Masukkan Master Key untuk mengambil data dari R2:");
+                    if (masterKey) {
+                        localStorage.setItem('masterKey', masterKey);
+                        await syncFromR2(masterKey);
+                    }
+                } else if (localStorage.getItem('masterKey')) {
+                    await syncFromR2(localStorage.getItem('masterKey'));
+                }
+
+                if (state.cfAccountId && state.cfToken) {
+                    showDashboard();
+                } else {
+                    showLogin();
+                }
+            }
+
+            async function syncFromR2(key) {
+                try {
+                    const res = await fetch("/api/config?user=default&key=" + encodeURIComponent(key));
+                    if (res.ok) {
+                        const config = await res.json();
+                        state.cfAccountId = config.cfAccountId;
+                        state.cfToken = config.cfToken;
+                        state.aiKey = config.aiKey;
+                        localStorage.setItem('cfAccountId', state.cfAccountId);
+                        localStorage.setItem('cfToken', state.cfToken);
+                        localStorage.setItem('aiKey', state.aiKey);
+                    }
+                } catch (e) {}
+            }
+
+            function showLogin() {
+                document.getElementById('view-login').classList.remove('hidden');
+                document.getElementById('view-dashboard').classList.add('hidden');
+            }
+
+            async function showDashboard() {
+                document.getElementById('view-login').classList.add('hidden');
+                document.getElementById('view-dashboard').classList.remove('hidden');
+                document.getElementById('set-cf-account-id').value = state.cfAccountId;
+                document.getElementById('set-cf-token').value = state.cfToken;
+                document.getElementById('set-ai-key').value = state.aiKey;
+                await loadData();
+            }
+
+            function logout() {
+                localStorage.clear();
+                location.reload();
+            }
+
+            function toggleSidebar() {
+                state.sidebarOpen = !state.sidebarOpen;
+                const sidebar = document.getElementById('sidebar');
+                const backdrop = document.getElementById('sidebar-backdrop');
+                if (state.sidebarOpen) {
+                    sidebar.classList.remove('-translate-x-full');
+                    backdrop.classList.remove('hidden');
+                } else {
+                    sidebar.classList.add('-translate-x-full');
+                    backdrop.classList.add('hidden');
+                }
+            }
+
+            function toggleSettings() {
+                document.getElementById('modal-settings').classList.toggle('hidden');
+            }
+
+            function toggleEditor() {
+                document.getElementById('modal-editor').classList.toggle('hidden');
+            }
+
+            async function saveSettings() {
+                state.cfAccountId = document.getElementById('set-cf-account-id').value;
+                state.cfToken = document.getElementById('set-cf-token').value;
+                state.aiKey = document.getElementById('set-ai-key').value;
+                const masterKey = localStorage.getItem('masterKey') || prompt("Masukkan Master Key untuk simpan ke R2:");
+
+                localStorage.setItem('cfAccountId', state.cfAccountId);
+                localStorage.setItem('cfToken', state.cfToken);
+                localStorage.setItem('aiKey', state.aiKey);
+                if (masterKey) localStorage.setItem('masterKey', masterKey);
+
+                if (masterKey) {
+                    try {
+                        await fetch("/api/config?user=default&key=" + encodeURIComponent(masterKey), {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                cfAccountId: state.cfAccountId,
+                                cfToken: state.cfToken,
+                                aiKey: state.aiKey
+                            })
+                        });
+                    } catch (e) {}
+                }
+                toggleSettings();
+                loadData();
+            }
+
+            async function handleLogin() {
+                state.cfAccountId = document.getElementById('cf-account-id').value;
+                state.cfToken = document.getElementById('cf-token').value;
+                state.aiKey = document.getElementById('ai-key').value;
+
+                if (!state.cfAccountId || !state.cfToken) {
+                    alert('Please fill Cloudflare fields');
+                    return;
+                }
+
+                const masterKey = prompt("Buat Master Key untuk simpan ke R2 (opsional, cancel jika tidak mau):");
+
+                localStorage.setItem('cfAccountId', state.cfAccountId);
+                localStorage.setItem('cfToken', state.cfToken);
+                localStorage.setItem('aiKey', state.aiKey);
                 if (masterKey) {
                     localStorage.setItem('masterKey', masterKey);
-                    await syncFromR2(masterKey);
+                    try {
+                        await fetch("/api/config?user=default&key=" + encodeURIComponent(masterKey), {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                cfAccountId: state.cfAccountId,
+                                cfToken: state.cfToken,
+                                aiKey: state.aiKey
+                            })
+                        });
+                    } catch (e) {}
                 }
-            } else if (localStorage.getItem('masterKey')) {
-                await syncFromR2(localStorage.getItem('masterKey'));
-            }
-
-            if (state.cfAccountId && state.cfToken) {
                 showDashboard();
-            } else {
-                showLogin();
             }
-        }
 
-        window.syncFromR2 = async function(key) {
-            try {
-                const res = await fetch("/api/config?user=default&key=" + encodeURIComponent(key));
-                if (res.ok) {
-                    const config = await res.json();
-                    state.cfAccountId = config.cfAccountId;
-                    state.cfToken = config.cfToken;
-                    state.aiKey = config.aiKey;
-                    localStorage.setItem('cfAccountId', state.cfAccountId);
-                    localStorage.setItem('cfToken', state.cfToken);
-                    localStorage.setItem('aiKey', state.aiKey);
-                }
-            } catch (e) {}
-        }
-
-        window.showLogin = function() {
-            document.getElementById('view-login').classList.remove('hidden');
-            document.getElementById('view-dashboard').classList.add('hidden');
-        }
-
-        window.showDashboard = async function() {
-            document.getElementById('view-login').classList.add('hidden');
-            document.getElementById('view-dashboard').classList.remove('hidden');
-            document.getElementById('set-cf-account-id').value = state.cfAccountId;
-            document.getElementById('set-cf-token').value = state.cfToken;
-            document.getElementById('set-ai-key').value = state.aiKey;
-            await loadData();
-        }
-
-        window.logout = function() {
-            localStorage.clear();
-            location.reload();
-        }
-
-        window.toggleSidebar = function() {
-            state.sidebarOpen = !state.sidebarOpen;
-            const sidebar = document.getElementById('sidebar');
-            const backdrop = document.getElementById('sidebar-backdrop');
-            if (state.sidebarOpen) {
-                sidebar.classList.remove('-translate-x-full');
-                backdrop.classList.remove('hidden');
-            } else {
-                sidebar.classList.add('-translate-x-full');
-                backdrop.classList.add('hidden');
-            }
-        }
-
-        window.toggleSettings = function() {
-            document.getElementById('modal-settings').classList.toggle('hidden');
-        }
-
-        window.toggleEditor = function() {
-            document.getElementById('modal-editor').classList.toggle('hidden');
-        }
-
-        window.saveSettings = async function() {
-            state.cfAccountId = document.getElementById('set-cf-account-id').value;
-            state.cfToken = document.getElementById('set-cf-token').value;
-            state.aiKey = document.getElementById('set-ai-key').value;
-            const masterKey = localStorage.getItem('masterKey') || prompt("Masukkan Master Key untuk simpan ke R2:");
-
-            localStorage.setItem('cfAccountId', state.cfAccountId);
-            localStorage.setItem('cfToken', state.cfToken);
-            localStorage.setItem('aiKey', state.aiKey);
-            if (masterKey) localStorage.setItem('masterKey', masterKey);
-
-            if (masterKey) {
+            async function loadData() {
                 try {
-                    await fetch("/api/config?user=default&key=" + encodeURIComponent(masterKey), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            cfAccountId: state.cfAccountId,
-                            cfToken: state.cfToken,
-                            aiKey: state.aiKey
-                        })
+                    const accRes = await fetch('/api/cloudflare/account', {
+                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
                     });
-                } catch (e) {}
-            }
-            toggleSettings();
-            loadData();
-        }
-
-        window.handleLogin = async function() {
-            state.cfAccountId = document.getElementById('cf-account-id').value;
-            state.cfToken = document.getElementById('cf-token').value;
-            state.aiKey = document.getElementById('ai-key').value;
-
-            if (!state.cfAccountId || !state.cfToken) {
-                alert('Please fill Cloudflare fields');
-                return;
-            }
-
-            const masterKey = prompt("Buat Master Key untuk simpan ke R2 (opsional, cancel jika tidak mau):");
-
-            localStorage.setItem('cfAccountId', state.cfAccountId);
-            localStorage.setItem('cfToken', state.cfToken);
-            localStorage.setItem('aiKey', state.aiKey);
-            if (masterKey) {
-                localStorage.setItem('masterKey', masterKey);
-                try {
-                    await fetch("/api/config?user=default&key=" + encodeURIComponent(masterKey), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            cfAccountId: state.cfAccountId,
-                            cfToken: state.cfToken,
-                            aiKey: state.aiKey
-                        })
-                    });
-                } catch (e) {}
-            }
-            showDashboard();
-        }
-
-        window.loadData = async function() {
-            try {
-                const accRes = await fetch('/api/cloudflare/account', {
-                    headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
-                });
-                const accData = await accRes.json();
-                if (accData.result) {
-                    state.account = accData.result;
-                    document.getElementById('cf-account-name').textContent = state.account.name;
-                    document.getElementById('cf-account-id-display').textContent = 'ID: ' + state.account.id;
-                }
-            } catch (e) {}
-            await Promise.all([loadWorkers(), loadDNS()]);
-        }
-
-        window.loadWorkers = async function() {
-            const content = document.getElementById('workers-list');
-            content.innerHTML = '<div class="flex justify-center py-4"><div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div></div>';
-            try {
-                const res = await fetch('/api/cloudflare/workers', {
-                    headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
-                });
-                const data = await res.json();
-                state.workers = data.result || [];
-                content.innerHTML = state.workers.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4 uppercase font-bold tracking-tighter">None</p>';
-                state.workers.forEach(w => {
-                    const item = document.createElement('div');
-                    item.className = 'p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/30 flex flex-col hover:bg-slate-800/60 transition-all cursor-pointer transform active:scale-95';
-                    item.innerHTML = "<span class='text-[10px] font-bold truncate text-slate-200'>" + w.id + "</span><span class='text-[8px] text-slate-500 uppercase font-black tracking-widest'>" + (w.usage_model || 'std') + "</span>";
-                    item.onclick = () => openWorker(w.id);
-                    content.appendChild(item);
-                });
-            } catch (e) {
-                content.innerHTML = '<p class="text-center text-red-400 text-[8px] py-4 uppercase font-bold">Error</p>';
-            }
-        }
-
-        window.loadDNS = async function() {
-            const content = document.getElementById('dns-list');
-            content.innerHTML = '<div class="flex justify-center py-4"><div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div></div>';
-            try {
-                const res = await fetch('/api/cloudflare/dns', {
-                    headers: { 'X-CF-Token': state.cfToken }
-                });
-                const data = await res.json();
-                state.dns = data.result || [];
-                content.innerHTML = state.dns.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4 uppercase font-bold tracking-tighter">None</p>';
-                state.dns.forEach(z => {
-                    const item = document.createElement('div');
-                    item.className = 'p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/30 flex flex-col hover:bg-slate-800/60 transition-colors cursor-default';
-                    item.innerHTML = "<span class='text-[10px] font-bold truncate text-slate-200'>" + z.name + "</span><span class='text-[8px] text-green-500/80 uppercase font-black tracking-widest'>" + z.status + "</span>";
-                    content.appendChild(item);
-                });
-            } catch (e) {
-                content.innerHTML = '<p class="text-center text-red-400 text-[8px] py-4 uppercase font-bold">Error</p>';
-            }
-        }
-
-        window.openWorker = async function(name) {
-            state.currentWorker = name;
-            document.getElementById('editor-worker-name').textContent = name;
-            const codeArea = document.getElementById('worker-code');
-            codeArea.value = 'Fetching code...';
-            toggleEditor();
-            toggleSidebar();
-
-            try {
-                const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
-                    headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
-                });
-                if (res.ok) {
-                    codeArea.value = await res.text();
-                } else {
-                    codeArea.value = '// Error fetching code from Cloudflare. Trying R2...';
-                    const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
-                    if (r2res.ok) {
-                        codeArea.value = await r2res.text();
+                    const accData = await accRes.json();
+                    if (accData.result) {
+                        state.account = accData.result;
+                        document.getElementById('cf-account-name').textContent = state.account.name;
+                        document.getElementById('cf-account-id-display').textContent = 'ID: ' + state.account.id;
                     }
-                }
-            } catch (e) {
-                codeArea.value = '// Error: ' + e.message;
+                } catch (e) {}
+                await Promise.all([loadWorkers(), loadDNS()]);
             }
-        }
 
-        window.saveToR2 = async function() {
-            const name = state.currentWorker;
-            const code = document.getElementById('worker-code').value;
-            try {
-                const res = await fetch("/api/cloudflare/workers/" + name + "/storage", {
-                    method: 'POST',
-                    body: code
-                });
-                if (res.ok) alert('Saved to R2 successfully');
-            } catch (e) { alert('Error: ' + e.message); }
-        }
-
-        window.deployWorker = async function() {
-            const name = state.currentWorker;
-            const code = document.getElementById('worker-code').value;
-            if (!confirm('Deploy changes to Cloudflare?')) return;
-            try {
-                const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
-                    method: 'PUT',
-                    headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken },
-                    body: code
-                });
-                const data = await res.json();
-                if (data.success) alert('Deployed successfully!');
-                else alert('Deploy failed: ' + (data.errors?.[0]?.message || 'Unknown error'));
-            } catch (e) { alert('Error: ' + e.message); }
-        }
-
-        window.workerAction = async function(type) {
-            const code = document.getElementById('worker-code').value;
-            toggleEditor();
-            const bt = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
-            let p = "";
-            if (type === 'analyze') p = "Analisa kode worker berikut dan jelaskan fungsinya:";
-            else if (type === 'review') p = "Review kode worker berikut, cari bug atau celah keamanan, dan berikan saran perbaikan:";
-            else if (type === 'generate') p = "Tolong perbaiki atau kembangkan fitur baru untuk kode worker ini dan berikan kodenya:";
-
-            document.getElementById('chat-input').value = p + "\n\n" + bt + "javascript\n" + code + "\n" + bt;
-            sendMessage();
-        }
-
-        window.sendMessage = async function() {
-            const input = document.getElementById('chat-input');
-            const promptStr = input.value.trim();
-            if (!promptStr) return;
-            input.value = '';
-            appendMessage('user', promptStr);
-            const loadingId = 'loading-' + Date.now();
-            appendMessage('ai', 'Thinking...', loadingId);
-            try {
-                const res = await fetch("/api/ai/chat?prompt=" + encodeURIComponent(promptStr));
-                const data = await res.json().catch(() => ({ error: 'Gagal memproses data AI.' }));
-
-                if (!res.ok) {
-                    throw new Error(data.error || "Gagal mendapatkan respon dari AI.");
+            async function loadWorkers() {
+                const content = document.getElementById('workers-list');
+                content.innerHTML = '<div class="flex justify-center py-4"><div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div></div>';
+                try {
+                    const res = await fetch('/api/cloudflare/workers', {
+                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
+                    });
+                    const data = await res.json();
+                    state.workers = data.result || [];
+                    content.innerHTML = state.workers.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4 uppercase font-bold tracking-tighter">None</p>';
+                    state.workers.forEach(w => {
+                        const item = document.createElement('div');
+                        item.className = 'p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/30 flex flex-col hover:bg-slate-800/60 transition-all cursor-pointer transform active:scale-95';
+                        item.innerHTML = "<span class='text-[10px] font-bold truncate text-slate-200'>" + w.id + "</span><span class='text-[8px] text-slate-500 uppercase font-black tracking-widest'>" + (w.usage_model || 'std') + "</span>";
+                        item.onclick = () => openWorker(w.id);
+                        content.appendChild(item);
+                    });
+                } catch (e) {
+                    content.innerHTML = '<p class="text-center text-red-400 text-[8px] py-4 uppercase font-bold">Error</p>';
                 }
-
-                const responseText = data.response || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
-                updateMessage(loadingId, responseText);
-            } catch (e) {
-                console.error(e);
-                updateMessage(loadingId, 'Kesalahan: ' + (e.message || 'Gagal mendapatkan respon dari AI.'));
             }
-        }
 
-        window.appendMessage = function(role, text, id = null) {
-            const container = document.getElementById('chat-messages');
-            const div = document.createElement('div');
-            div.className = "flex " + (role === 'user' ? 'justify-end' : 'justify-start');
-            if (id) div.id = id;
-            div.innerHTML = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed shadow-lg shadow-black/20'>" + text + "</div>";
-            container.appendChild(div);
-            container.scrollTop = container.scrollHeight;
-        }
+            async function loadDNS() {
+                const content = document.getElementById('dns-list');
+                content.innerHTML = '<div class="flex justify-center py-4"><div class="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div></div>';
+                try {
+                    const res = await fetch('/api/cloudflare/dns', {
+                        headers: { 'X-CF-Token': state.cfToken }
+                    });
+                    const data = await res.json();
+                    state.dns = data.result || [];
+                    content.innerHTML = state.dns.length ? '' : '<p class="text-center text-slate-500 text-[8px] py-4 uppercase font-bold tracking-tighter">None</p>';
+                    state.dns.forEach(z => {
+                        const item = document.createElement('div');
+                        item.className = 'p-2.5 rounded-xl bg-slate-800/40 border border-slate-700/30 flex flex-col hover:bg-slate-800/60 transition-colors cursor-default';
+                        item.innerHTML = "<span class='text-[10px] font-bold truncate text-slate-200'>" + z.name + "</span><span class='text-[8px] text-green-500/80 uppercase font-black tracking-widest'>" + z.status + "</span>";
+                        content.appendChild(item);
+                    });
+                } catch (e) {
+                    content.innerHTML = '<p class="text-center text-red-400 text-[8px] py-4 uppercase font-bold">Error</p>';
+                }
+            }
 
-        window.updateMessage = function(id, text) {
-            const div = document.getElementById(id);
-            if (div) {
-                div.querySelector('div').textContent = text;
+            async function openWorker(name) {
+                state.currentWorker = name;
+                document.getElementById('editor-worker-name').textContent = name;
+                const codeArea = document.getElementById('worker-code');
+                codeArea.value = 'Fetching code...';
+                toggleEditor();
+                toggleSidebar();
+
+                try {
+                    const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
+                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken }
+                    });
+                    if (res.ok) {
+                        codeArea.value = await res.text();
+                    } else {
+                        codeArea.value = '// Error fetching code from Cloudflare. Trying R2...';
+                        const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
+                        if (r2res.ok) {
+                            codeArea.value = await r2res.text();
+                        }
+                    }
+                } catch (e) {
+                    codeArea.value = '// Error: ' + e.message;
+                }
+            }
+
+            async function saveToR2() {
+                const name = state.currentWorker;
+                const code = document.getElementById('worker-code').value;
+                try {
+                    const res = await fetch("/api/cloudflare/workers/" + name + "/storage", {
+                        method: 'POST',
+                        body: code
+                    });
+                    if (res.ok) alert('Saved to R2 successfully');
+                } catch (e) { alert('Error: ' + e.message); }
+            }
+
+            async function deployWorker() {
+                const name = state.currentWorker;
+                const code = document.getElementById('worker-code').value;
+                if (!confirm('Deploy changes to Cloudflare?')) return;
+                try {
+                    const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
+                        method: 'PUT',
+                        headers: { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken },
+                        body: code
+                    });
+                    const data = await res.json();
+                    if (data.success) alert('Deployed successfully!');
+                    else alert('Deploy failed: ' + (data.errors?.[0]?.message || 'Unknown error'));
+                } catch (e) { alert('Error: ' + e.message); }
+            }
+
+            async function workerAction(type) {
+                const code = document.getElementById('worker-code').value;
+                toggleEditor();
+                const bt = String.fromCharCode(96, 96, 96);
+                const nl = String.fromCharCode(10);
+                let p = "";
+                if (type === 'analyze') p = "Analisa kode worker berikut dan jelaskan fungsinya:";
+                else if (type === 'review') p = "Review kode worker berikut, cari bug atau celah keamanan, dan berikan saran perbaikan:";
+                else if (type === 'generate') p = "Tolong perbaiki atau kembangkan fitur baru untuk kode worker ini dan berikan kodenya:";
+
+                document.getElementById('chat-input').value = p + nl + nl + bt + "javascript" + nl + code + nl + bt;
+                sendMessage();
+            }
+
+            async function sendMessage() {
+                const input = document.getElementById('chat-input');
+                const promptStr = input.value.trim();
+                if (!promptStr) return;
+                input.value = '';
+                appendMessage('user', promptStr);
+                const loadingId = 'loading-' + Date.now();
+                appendMessage('ai', 'Thinking...', loadingId);
+                try {
+                    const res = await fetch("/api/ai/chat?prompt=" + encodeURIComponent(promptStr));
+                    const data = await res.json().catch(() => ({ error: 'Gagal memproses data AI.' }));
+
+                    if (!res.ok) {
+                        throw new Error(data.error || "Gagal mendapatkan respon dari AI.");
+                    }
+
+                    const responseText = data.response || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
+                    updateMessage(loadingId, responseText);
+                } catch (e) {
+                    console.error(e);
+                    updateMessage(loadingId, 'Kesalahan: ' + (e.message || 'Gagal mendapatkan respon dari AI.'));
+                }
+            }
+
+            function appendMessage(role, text, id = null) {
                 const container = document.getElementById('chat-messages');
+                const div = document.createElement('div');
+                div.className = "flex " + (role === 'user' ? 'justify-end' : 'justify-start');
+                if (id) div.id = id;
+                div.innerHTML = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed whitespace-pre-wrap shadow-lg shadow-black/20'>" + text + "</div>";
+                container.appendChild(div);
                 container.scrollTop = container.scrollHeight;
             }
-        }
 
-        document.getElementById('chat-input').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMessage();
-        });
+            function updateMessage(id, text) {
+                const div = document.getElementById(id);
+                if (div) {
+                    div.querySelector('div').textContent = text;
+                    const container = document.getElementById('chat-messages');
+                    container.scrollTop = container.scrollHeight;
+                }
+            }
 
-        init();
+            document.getElementById('chat-input').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendMessage();
+            });
+
+            // Export to window
+            window.state = state;
+            window.syncFromR2 = syncFromR2;
+            window.showLogin = showLogin;
+            window.showDashboard = showDashboard;
+            window.logout = logout;
+            window.toggleSidebar = toggleSidebar;
+            window.toggleSettings = toggleSettings;
+            window.toggleEditor = toggleEditor;
+            window.saveSettings = saveSettings;
+            window.handleLogin = handleLogin;
+            window.loadData = loadData;
+            window.loadWorkers = loadWorkers;
+            window.loadDNS = loadDNS;
+            window.openWorker = openWorker;
+            window.saveToR2 = saveToR2;
+            window.deployWorker = deployWorker;
+            window.workerAction = workerAction;
+            window.sendMessage = sendMessage;
+            window.appendMessage = appendMessage;
+            window.updateMessage = updateMessage;
+
+            init();
+        })();
     </script>
 </body>
 </html>`
