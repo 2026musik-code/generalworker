@@ -51,6 +51,13 @@ app.get('/api/cloudflare/account', async (c) => {
   return c.json(await response.json())
 })
 
+app.get('/api/cloudflare/user', async (c) => {
+  const response = await fetch("https://api.cloudflare.com/client/v4/user", {
+    headers: getCFHeaders(c)
+  })
+  return c.json(await response.json())
+})
+
 app.get('/api/cloudflare/workers/:name/content', async (c) => {
   const accountId = c.req.header('X-CF-Account-ID')
   const name = c.req.param('name')
@@ -73,14 +80,37 @@ app.put('/api/cloudflare/workers/:name/content', async (c) => {
   const name = c.req.param('name')
   if (!accountId) return c.json({ error: 'Missing account ID' }, 400)
 
-  const content = await c.req.text()
+  const body = await c.req.json()
+  const { code, vars } = body
+
+  const formData = new FormData()
+
+  // Detect module
+  const isModule = code.includes('export default') || code.includes('import ')
+
+  const metadata = {
+      main_module: isModule ? 'worker.js' : undefined,
+      body_part: isModule ? undefined : 'worker.js',
+      bindings: [] as any[]
+  }
+
+  if (vars) {
+      for (const [key, value] of Object.entries(vars)) {
+          metadata.bindings.push({
+              type: 'plain_text',
+              name: key,
+              text: value
+          })
+      }
+  }
+
+  formData.append('metadata', JSON.stringify(metadata))
+  formData.append('worker.js', new Blob([code], { type: 'application/javascript' }), 'worker.js')
+
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}`, {
     method: 'PUT',
-    headers: {
-        ...getCFHeaders(c),
-        'Content-Type': 'application/javascript'
-    },
-    body: content
+    headers: getCFHeaders(c),
+    body: formData
   })
   return c.json(await response.json())
 })
@@ -214,19 +244,22 @@ app.get('/', (c) => {
         </div>
 
         <div id="view-dashboard" class="hidden flex-grow flex flex-col h-screen overflow-hidden z-10">
-            <header class="h-16 flex items-center justify-between px-4 border-b border-slate-800 glass z-30">
-                <div class="flex items-center space-x-2">
-                    <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-                        <i class="fa-solid fa-bolt text-xs"></i>
+            <header class="h-20 flex items-center justify-between px-6 border-b border-slate-800 glass z-30 shadow-2xl shadow-blue-500/5">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+                        <i class="fa-solid fa-bolt text-sm text-white"></i>
                     </div>
-                    <span class="font-black text-sm tracking-tight gradient-text">GW</span>
+                    <div class="flex flex-col">
+                        <span class="font-black text-sm tracking-tighter gradient-text leading-none">GENERAL</span>
+                        <span class="font-black text-xs tracking-widest text-slate-500 leading-none mt-1">WORKER</span>
+                    </div>
                 </div>
-                <div class="flex items-center space-x-2">
-                    <button onclick="toggleSettings()" class="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-slate-800 transition-colors">
-                        <i class="fa-solid fa-sliders text-slate-400 text-sm"></i>
+                <div class="flex items-center space-x-3">
+                    <button onclick="toggleSettings()" class="w-12 h-12 flex items-center justify-center rounded-2xl bg-slate-800/50 hover:bg-slate-800 border border-slate-700/50 transition-all active:scale-90">
+                        <i class="fa-solid fa-sliders text-blue-400 text-lg"></i>
                     </button>
-                    <button onclick="toggleSidebar()" class="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-slate-800 transition-colors">
-                        <i class="fa-solid fa-bars text-slate-400 text-sm"></i>
+                    <button onclick="toggleSidebar()" class="w-12 h-12 flex items-center justify-center rounded-2xl bg-gradient-to-tr from-blue-600/10 to-indigo-600/10 hover:from-blue-600/20 hover:to-indigo-600/20 border border-blue-500/20 transition-all active:scale-90">
+                        <i class="fa-solid fa-bars-staggered text-blue-400 text-lg"></i>
                     </button>
                 </div>
             </header>
@@ -240,7 +273,7 @@ app.get('/', (c) => {
 
                     <div class="p-6 border-b border-slate-800 bg-slate-800/20">
                         <div class="flex items-center space-x-4">
-                            <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-lg font-bold shadow-lg">CF</div>
+                            <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-lg font-bold shadow-lg">👤</div>
                             <div class="flex flex-col overflow-hidden">
                                 <span id="cf-account-name" class="text-sm font-bold truncate">Loading...</span>
                                 <span id="cf-account-id-display" class="text-[10px] text-slate-500 truncate">ID: ...</span>
@@ -336,8 +369,21 @@ app.get('/', (c) => {
                     <button onclick="toggleEditor()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
                 </div>
 
-                <div class="flex-grow relative bg-slate-900/50">
-                    <textarea id="worker-code" class="absolute inset-0 w-full h-full bg-transparent p-6 font-mono text-xs focus:outline-none resize-none" spellcheck="false"></textarea>
+                <div class="flex-grow flex flex-col overflow-hidden bg-slate-900/50">
+                    <div class="flex-grow relative border-b border-slate-800">
+                        <textarea id="worker-code" class="absolute inset-0 w-full h-full bg-transparent p-6 font-mono text-xs focus:outline-none resize-none" spellcheck="false"></textarea>
+                    </div>
+
+                    <!-- Env Vars Table -->
+                    <div class="h-32 flex flex-col bg-black/20">
+                        <div class="px-4 py-1.5 border-b border-slate-800 flex justify-between items-center bg-slate-800/20">
+                            <span class="text-[9px] font-black uppercase tracking-widest text-slate-500">Env Variables</span>
+                            <button onclick="addEnvVarRow()" class="text-[18px] text-green-500 hover:text-green-400 transition-colors">&plus;</button>
+                        </div>
+                        <div class="flex-grow overflow-y-auto p-2">
+                            <div id="env-vars-container" class="space-y-1"></div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="p-4 border-t border-slate-800 glass grid grid-cols-2 sm:grid-cols-5 gap-2">
@@ -387,6 +433,11 @@ app.get('/', (c) => {
                         </div>
                     </div>
                     <pre id="preview-code" class="flex-grow overflow-auto p-6 font-mono text-xs text-blue-300 whitespace-pre scroll-smooth"></pre>
+
+                    <div id="preview-vars-section" class="hidden p-4 bg-indigo-900/10 border-t border-slate-800">
+                        <span class="text-[9px] font-black uppercase tracking-widest text-indigo-400 mb-2 block">AI Suggested Vars</span>
+                        <div id="preview-vars-list" class="space-y-1"></div>
+                    </div>
                 </div>
 
                 <div class="p-4 border-t border-slate-800 glass flex gap-3">
@@ -439,12 +490,14 @@ app.get('/', (c) => {
                 cfEmail: localStorage.getItem('cfEmail') || '',
                 aiKey: localStorage.getItem('aiKey') || '',
                 account: null,
+                user: null,
                 workers: [],
                 dns: [],
                 sidebarOpen: false,
                 currentWorker: null,
                 currentCode: '',
-                lastGeneratedCode: ''
+                lastGeneratedCode: '',
+                lastGeneratedVars: {}
             };
 
             async function init() {
@@ -575,6 +628,23 @@ app.get('/', (c) => {
                 if (!modal.classList.contains('hidden')) {
                     document.getElementById('preview-worker-name').textContent = 'Worker: ' + state.currentWorker;
                     document.getElementById('preview-code').textContent = state.lastGeneratedCode;
+
+                    const varsSection = document.getElementById('preview-vars-section');
+                    const varsList = document.getElementById('preview-vars-list');
+                    varsList.innerHTML = '';
+
+                    if (state.lastGeneratedVars && Object.keys(state.lastGeneratedVars).length > 0) {
+                        varsSection.classList.remove('hidden');
+                        for (const [k, v] of Object.entries(state.lastGeneratedVars)) {
+                            const div = document.createElement('div');
+                            div.className = 'flex justify-between items-center text-[10px] font-mono bg-indigo-500/10 p-1.5 rounded border border-indigo-500/20';
+                            div.innerHTML = "<span class='text-indigo-300 font-bold'>" + k + "</span><span class='text-slate-400'>" + v + "</span>";
+                            varsList.appendChild(div);
+                        }
+                    } else {
+                        varsSection.classList.add('hidden');
+                    }
+
                     if (state.currentWorker) {
                         const name = state.currentWorker;
                         const match = name.match(/_v(\d+)$/);
@@ -596,6 +666,13 @@ app.get('/', (c) => {
             function applyPreview() {
                 document.getElementById('worker-code').value = state.lastGeneratedCode;
                 state.currentCode = state.lastGeneratedCode;
+
+                if (state.lastGeneratedVars) {
+                    for (const [k, v] of Object.entries(state.lastGeneratedVars)) {
+                        addEnvVarRow(k, v);
+                    }
+                }
+
                 togglePreview();
                 document.getElementById('modal-editor').classList.remove('hidden');
             }
@@ -605,13 +682,20 @@ app.get('/', (c) => {
                 if (!confirm('Deploy code baru ke Cloudflare dengan nama "' + name + '"?')) return;
                 addSystemLog("Deploying worker: " + name + "...");
                 const code = state.lastGeneratedCode;
+                const vars = state.lastGeneratedVars || {};
+
                 try {
-                    const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
+                    const headers = {
+                        'X-CF-Account-ID': state.cfAccountId,
+                        'X-CF-Token': state.cfToken,
+                        'Content-Type': 'application/json'
+                    };
                     if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
+
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
                         method: 'PUT',
                         headers: headers,
-                        body: code
+                        body: JSON.stringify({ code, vars })
                     });
                     const data = await res.json();
                     if (data.success) {
@@ -623,12 +707,48 @@ app.get('/', (c) => {
                     } else {
                         const errMsg = data.errors?.[0]?.message || 'Unknown error';
                         addSystemLog("Deploy gagal: " + errMsg, true);
-                        alert('Deploy failed: ' + errMsg);
+
+                        // Auto Fix
+                        if (confirm("Deploy gagal: " + errMsg + ". Minta Gemini perbaiki otomatis?")) {
+                             autoFixCode(code, errMsg, name);
+                        }
                     }
                 } catch (e) {
                     addSystemLog("Deploy error: " + e.message, true);
                     alert('Error: ' + e.message);
                 }
+            }
+
+            async function autoFixCode(code, errorMsg, name) {
+                const prompt = "The following Cloudflare Worker code for '" + name + "' failed to deploy with this error: \\"" + errorMsg + "\\".\\n\\n" +
+                             "Please FIX the code. Return ONLY a valid JSON object with format:\\n" +
+                             "{\\"code\\": \\"full fixed javascript code\\", \\"vars\\": { \\"KEY\\": \\"VALUE\\" }}\\n\\n" +
+                             "Code:\\n" + code;
+
+                togglePreview(); // Close preview if open
+                sendMessage(prompt, "Gemini, fix deployment error for: " + name);
+            }
+
+            function addEnvVarRow(key = '', value = '') {
+                const container = document.getElementById('env-vars-container');
+                const div = document.createElement('div');
+                div.className = 'flex gap-2 items-center';
+                div.innerHTML = "<input type='text' placeholder='KEY' value='" + key + "' class='w-1/3 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-[10px] text-indigo-300 focus:outline-none focus:border-indigo-500'>" +
+                                "<input type='text' placeholder='VALUE' value='" + value + "' class='flex-grow bg-slate-800 border border-slate-700 rounded px-2 py-1 text-[10px] text-slate-300 focus:outline-none focus:border-indigo-500'>" +
+                                "<button onclick='this.parentElement.remove()' class='text-red-500 hover:text-red-400 px-1'>&times;</button>";
+                container.appendChild(div);
+            }
+
+            function getEnvVars() {
+                const rows = document.querySelectorAll('#env-vars-container > div');
+                const vars = {};
+                rows.forEach(row => {
+                    const inputs = row.querySelectorAll('input');
+                    const key = inputs[0].value.trim();
+                    const val = inputs[1].value;
+                    if (key) vars[key] = val;
+                });
+                return vars;
             }
 
             async function saveSettings() {
@@ -702,14 +822,21 @@ app.get('/', (c) => {
                 try {
                     const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
                     if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
-                    const accRes = await fetch('/api/cloudflare/account', { headers: headers });
+
+                    const [accRes, userRes] = await Promise.all([
+                        fetch('/api/cloudflare/account', { headers: headers }),
+                        fetch('/api/cloudflare/user', { headers: headers })
+                    ]);
+
                     const accData = await accRes.json();
+                    const userData = await userRes.json();
 
                     if (accData.result) {
                         state.account = accData.result;
-                        document.getElementById('cf-account-name').textContent = state.account.name;
+                        const userName = userData.result?.first_name ? userData.result.first_name + " " + (userData.result.last_name || "") : (userData.result?.email || state.account.name);
+                        document.getElementById('cf-account-name').textContent = userName;
                         document.getElementById('cf-account-id-display').textContent = 'ID: ' + state.account.id;
-                        addSystemLog("Cloudflare terhubung: " + state.account.name);
+                        addSystemLog("Cloudflare terhubung: " + userName);
                     } else {
                         const err = accData.errors?.[0] || {};
                         let msg = err.message || 'Gagal memuat akun';
@@ -772,11 +899,11 @@ app.get('/', (c) => {
                 document.getElementById('editor-worker-name').textContent = name;
                 const codeArea = document.getElementById('worker-code');
                 codeArea.value = 'Syncing...';
+                document.getElementById('env-vars-container').innerHTML = ''; // Clear env vars
                 toggleEditor();
                 toggleSidebar();
                 loadLogs(name);
                 try {
-                    // STEP 1: Cek R2 dulu (Metode Utama kita sekarang)
                     addSystemLog("Mencari kode di R2 untuk " + name + "...");
                     const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
                     if (r2res.ok) {
@@ -787,7 +914,6 @@ app.get('/', (c) => {
                         return;
                     }
 
-                    // STEP 2: Jika tidak ada di R2, coba ambil dari Cloudflare
                     addSystemLog("Kode tidak ada di R2. Mencoba fetch dari Cloudflare...");
                     const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
                     if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
@@ -797,7 +923,6 @@ app.get('/', (c) => {
                         const code = await res.text();
                         codeArea.value = code;
                         state.currentCode = code;
-                        // Auto-save ke R2 agar kedepannya tidak kena limit GET lagi
                         fetch("/api/cloudflare/workers/" + name + "/storage", { method: 'POST', body: code });
                         addSystemLog("Sukses: Kode diambil dari Cloudflare & dicadangkan ke R2.");
                     } else {
@@ -849,18 +974,33 @@ app.get('/', (c) => {
             async function deployWorker() {
                 const name = state.currentWorker;
                 const code = document.getElementById('worker-code').value;
+                const vars = getEnvVars();
+
                 if (!confirm('Deploy changes to Cloudflare?')) return;
                 try {
-                    const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
+                    const headers = {
+                        'X-CF-Account-ID': state.cfAccountId,
+                        'X-CF-Token': state.cfToken,
+                        'Content-Type': 'application/json'
+                    };
                     if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
+
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", {
                         method: 'PUT',
                         headers: headers,
-                        body: code
+                        body: JSON.stringify({ code, vars })
                     });
                     const data = await res.json();
-                    if (data.success) alert('Deployed successfully!');
-                    else alert('Deploy failed: ' + (data.errors?.[0]?.message || 'Unknown error'));
+                    if (data.success) {
+                        addSystemLog("Deploy sukses: " + name);
+                        alert('Deployed successfully!');
+                    } else {
+                        const errMsg = data.errors?.[0]?.message || 'Unknown error';
+                        addSystemLog("Deploy gagal: " + errMsg, true);
+                        if (confirm("Deploy gagal: " + errMsg + ". Minta Gemini perbaiki otomatis?")) {
+                             autoFixCode(code, errMsg, name);
+                        }
+                    }
                 } catch (e) { alert('Error: ' + e.message); }
             }
 
@@ -900,21 +1040,28 @@ app.get('/', (c) => {
                 toggleEditor();
                 const bt = String.fromCharCode(96, 96, 96);
                 let p = "";
-                if (type === 'analyze') p = "Analyze this worker code. Suggest fixes and provide improved code. If it helps, transform the worker into a web-based management interface. Provide improved code in " + bt + "javascript block:";
-                else if (type === 'review') p = "Review this worker code for bugs/security. Optimize it and consider adding a web dashboard. Provide optimized code in " + bt + "javascript block:";
-                else if (type === 'generate') p = "Develop new features or generate a complete web page interface for this worker. Provide complete code in " + bt + "javascript block:";
+                if (type === 'analyze') p = "Analyze this worker code. Suggest fixes and provide improved code. Transform the worker into a full Web Management Page if possible. Provide improved code and needed env vars.";
+                else if (type === 'review') p = "Review this worker code for bugs/security. Optimize it and generate a Web Page Dashboard. Provide optimized code and needed env vars.";
+                else if (type === 'generate') p = "Develop new features or generate a complete Web Page Interface for this worker. Provide complete code and needed env vars.";
 
-                const fullPrompt = p + "\\n\\n" + bt + "javascript\\n" + code + "\\n" + bt;
+                const fullPrompt = p + "\\n\\nIMPORTANT: Return ONLY a valid JSON object in your response (no markdown blocks around the JSON):\\n" +
+                                 "{\\"code\\": \\"full javascript code here\\", \\"vars\\": {\\"KEY\\": \\"VALUE\\"}}\\n\\n" +
+                                 "Code:\\n" + code;
+
                 addLog(state.currentWorker, type, "Requesting Gemini for " + type);
-                sendMessage(fullPrompt, "Gemini, please " + type + " worker: " + state.currentWorker);
+                sendMessage(fullPrompt, "Gemini, please " + type + " worker: " + state.currentWorker + " and make it a Web Page if appropriate.");
             }
 
             async function sendMessage(overridePrompt = null, displayPrompt = null) {
-                // Always sync current editor code before sending message if a worker is open
+                let currentEnvContext = "";
                 if (state.currentWorker) {
                     const editorValue = document.getElementById('worker-code').value;
                     if (editorValue && !editorValue.includes('[CLOUDFLARE SECURITY RESTRICTION]') && !editorValue.startsWith('// Gagal')) {
                         state.currentCode = editorValue;
+                    }
+                    const vars = getEnvVars();
+                    if (Object.keys(vars).length > 0) {
+                        currentEnvContext = "\\n\\nCurrent Environment Variables: " + JSON.stringify(vars);
                     }
                 }
 
@@ -930,11 +1077,11 @@ app.get('/', (c) => {
 
                 const hasNoCode = !state.currentCode || state.currentCode.includes('[CLOUDFLARE SECURITY RESTRICTION]') || state.currentCode.startsWith('// Gagal');
                 const sysPrompt = "You are GENERAL WORKER AI. You assist with Cloudflare Workers. You MUST provide functional, complete worker scripts.\\n" +
-                                 "IMPORTANT: When asked to edit, generate, or review, strive to create a Web Page Interface (HTML/JS/CSS) within the worker using Hono or standard Responses so the user can interact with the worker via browser.\\n" +
+                                 "IMPORTANT: When asked to edit, generate, or review, ALWAYS strive to create a Web Page Interface (HTML/JS/CSS) within the worker using Hono or standard Response(html, {headers:{'Content-Type':'text/html'}}).\\n" +
                                  "Account: " + (state.account ? state.account.name : 'Unknown') + "\\n" +
                                  "Workers: " + state.workers.map(w => w.id).join(', ') + "\\n" +
                                  "DNS: " + state.dns.map(d => d.name).join(', ') + "\\n" +
-                                 (state.currentWorker ? "Target Worker: " + state.currentWorker + "\\nTarget Worker Source Code Status: " + (hasNoCode ? "NOT LOADED (User needs to paste code)" : "LOADED") + "\\n" + (hasNoCode ? "" : "Source Code:\\n" + state.currentCode) : "") + "\\n\\n" +
+                                 (state.currentWorker ? "Target Worker: " + state.currentWorker + "\\nTarget Worker Source Code Status: " + (hasNoCode ? "NOT LOADED (User needs to paste code)" : "LOADED") + "\\n" + (hasNoCode ? "" : "Source Code:\\n" + state.currentCode) : "") + currentEnvContext + "\\n\\n" +
                                  (hasNoCode ? "NOTE: If you need to see the code to fulfill the request, politely ask the user to PASTE the code into the editor first.\\n" : "") +
                                  "Instructions: " + promptRaw;
 
@@ -948,15 +1095,32 @@ app.get('/', (c) => {
                     if (!res.ok) throw new Error(data.error);
 
                     updateAIStatus(true);
-                    const text = data.response;
-                    const bt = String.fromCharCode(96, 96, 96);
-                    let finalCode = "";
-                    if (text.includes(bt + "javascript")) finalCode = text.split(bt + "javascript")[1].split(bt)[0].trim();
-                    else if (text.includes(bt + "js")) finalCode = text.split(bt + "js")[1].split(bt)[0].trim();
-                    else if (text.includes(bt + "html")) finalCode = text.split(bt + "html")[1].split(bt)[0].trim();
+                    let text = data.response;
 
-                    if (finalCode) {
-                        state.lastGeneratedCode = finalCode;
+                    // JSON Intelligence Parsing
+                    let code = "";
+                    let vars = {};
+
+                    try {
+                        // Look for JSON object if Gemini followed instructions
+                        const jsonMatch = text.match(/\\{[\\s\\S]*\\"code\\"[\\s\\S]*\\}/);
+                        if (jsonMatch) {
+                            const parsed = JSON.parse(jsonMatch[0]);
+                            code = parsed.code;
+                            vars = parsed.vars || {};
+                            text = text.replace(jsonMatch[0], "[Detailed Code & Vars generated]");
+                        } else {
+                            // Fallback to markdown parsing
+                            const bt = String.fromCharCode(96, 96, 96);
+                            if (text.includes(bt + "javascript")) code = text.split(bt + "javascript")[1].split(bt)[0].trim();
+                            else if (text.includes(bt + "js")) code = text.split(bt + "js")[1].split(bt)[0].trim();
+                            else if (text.includes(bt + "html")) code = text.split(bt + "html")[1].split(bt)[0].trim();
+                        }
+                    } catch (e) {}
+
+                    if (code) {
+                        state.lastGeneratedCode = code;
+                        state.lastGeneratedVars = vars;
                         updateMessage(loadingId, text, true);
                     } else {
                         updateMessage(loadingId, text);
@@ -1012,6 +1176,7 @@ app.get('/', (c) => {
             window.saveSettings = saveSettings;
             window.toggleLogs = toggleLogs;
             window.toggleErrorLog = toggleErrorLog;
+            window.addEnvVarRow = addEnvVarRow;
 
             init();
         })();
