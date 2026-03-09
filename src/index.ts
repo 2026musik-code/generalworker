@@ -60,11 +60,9 @@ app.get('/api/cloudflare/workers/:name/content', async (c) => {
     headers: getCFHeaders(c)
   })
 
-  if (response.status === 405 || response.status === 403) {
+  if (!response.ok) {
       const data: any = await response.json().catch(() => ({}));
-      if (data.errors?.[0]?.code === 10000) {
-          return c.json(data, 405);
-      }
+      return c.json(data, response.status as any);
   }
 
   return new Response(response.body, { headers: { 'Content-Type': 'text/javascript' } })
@@ -785,20 +783,29 @@ app.get('/', (c) => {
                         const code = await res.text();
                         codeArea.value = code;
                         state.currentCode = code;
-                    } else if (res.status === 405) {
-                        const data = await res.json();
-                        if (data.errors?.[0]?.code === 10000) {
-                            const msg = "Cloudflare melarang akses GET menggunakan API Token.\\nSilakan ganti ke 'Global API Key' di Settings dan isi Cloudflare Email.";
-                            codeArea.value = "// Error 10000: " + msg;
-                            addSystemLog("CF Error: " + msg, true);
-                        }
                     } else {
-                        codeArea.value = '// Gagal mengambil kode. Mencoba dari R2...';
+                        const data = await res.json().catch(() => ({}));
+                        const cfError = data.errors?.[0];
+                        let msg = "Gagal mengambil kode dari Cloudflare.";
+                        if (cfError?.code === 10000) {
+                            msg = "Cloudflare melarang akses GET menggunakan API Token Scoped.\\n\\nSOLUSI: Buka SETTINGS, ganti API Token dengan 'Global API Key', dan isi Cloudflare Email.";
+                        } else if (cfError?.message) {
+                            msg = "CF Error " + cfError.code + ": " + cfError.message;
+                        }
+
+                        addSystemLog("Cloudflare Fetch Failed: " + (cfError?.message || res.status), true);
+
+                        // Try R2 as fallback
                         const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
                         if (r2res.ok) {
                             const code = await r2res.text();
                             codeArea.value = code;
                             state.currentCode = code;
+                            addSystemLog("Fallback: Kode diambil dari R2.");
+                        } else {
+                            const fallbackMsg = "// " + msg + "\\n\\n// Kode tidak ditemukan di R2.\\n// Anda bisa PASTE kode worker di sini secara manual untuk dianalisa AI.";
+                            codeArea.value = fallbackMsg;
+                            state.currentCode = fallbackMsg;
                         }
                     }
                 } catch (e) { codeArea.value = '// Error: ' + e.message; }
