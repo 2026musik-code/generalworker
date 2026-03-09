@@ -59,6 +59,14 @@ app.get('/api/cloudflare/workers/:name/content', async (c) => {
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}/content`, {
     headers: getCFHeaders(c)
   })
+
+  if (response.status === 405 || response.status === 403) {
+      const data: any = await response.json().catch(() => ({}));
+      if (data.errors?.[0]?.code === 10000) {
+          return c.json(data, 405);
+      }
+  }
+
   return new Response(response.body, { headers: { 'Content-Type': 'text/javascript' } })
 })
 
@@ -437,6 +445,7 @@ app.get('/', (c) => {
                 dns: [],
                 sidebarOpen: false,
                 currentWorker: null,
+                currentCode: '',
                 lastGeneratedCode: ''
             };
 
@@ -588,6 +597,7 @@ app.get('/', (c) => {
 
             function applyPreview() {
                 document.getElementById('worker-code').value = state.lastGeneratedCode;
+                state.currentCode = state.lastGeneratedCode;
                 togglePreview();
                 document.getElementById('modal-editor').classList.remove('hidden');
             }
@@ -705,6 +715,9 @@ app.get('/', (c) => {
                     } else {
                         const err = accData.errors?.[0] || {};
                         let msg = err.message || 'Gagal memuat akun';
+                        if (err.code === 10000 && !state.cfEmail) {
+                            msg = "API Token ditolak. Gunakan 'Global API Key' + Email di Settings.";
+                        }
                         addSystemLog("CF Error: " + msg, true);
                     }
                 } catch (e) {
@@ -768,8 +781,26 @@ app.get('/', (c) => {
                     const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
                     if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", { headers: headers });
-                    if (res.ok) codeArea.value = await res.text();
-                    else codeArea.value = '// Error fetching code.';
+                    if (res.ok) {
+                        const code = await res.text();
+                        codeArea.value = code;
+                        state.currentCode = code;
+                    } else if (res.status === 405) {
+                        const data = await res.json();
+                        if (data.errors?.[0]?.code === 10000) {
+                            const msg = "Cloudflare melarang akses GET menggunakan API Token.\\nSilakan ganti ke 'Global API Key' di Settings dan isi Cloudflare Email.";
+                            codeArea.value = "// Error 10000: " + msg;
+                            addSystemLog("CF Error: " + msg, true);
+                        }
+                    } else {
+                        codeArea.value = '// Gagal mengambil kode. Mencoba dari R2...';
+                        const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
+                        if (r2res.ok) {
+                            const code = await r2res.text();
+                            codeArea.value = code;
+                            state.currentCode = code;
+                        }
+                    }
                 } catch (e) { codeArea.value = '// Error: ' + e.message; }
             }
 
@@ -831,12 +862,13 @@ app.get('/', (c) => {
 
             async function workerAction(type) {
                 const code = document.getElementById('worker-code').value;
+                state.currentCode = code;
                 toggleEditor();
                 const bt = String.fromCharCode(96, 96, 96);
                 let p = "";
-                if (type === 'analyze') p = "Analyze this worker code. Suggest fixes and provide improved code in " + bt + "javascript block:";
-                else if (type === 'review') p = "Review this worker code for bugs/security. Provide optimized code in " + bt + "javascript block:";
-                else if (type === 'generate') p = "Develop new features for this worker. Provide complete code in " + bt + "javascript block:";
+                if (type === 'analyze') p = "Analyze this worker code. Suggest fixes and provide improved code. If it helps, transform the worker into a web-based management interface. Provide improved code in " + bt + "javascript block:";
+                else if (type === 'review') p = "Review this worker code for bugs/security. Optimize it and consider adding a web dashboard. Provide optimized code in " + bt + "javascript block:";
+                else if (type === 'generate') p = "Develop new features or generate a complete web page interface for this worker. Provide complete code in " + bt + "javascript block:";
 
                 const fullPrompt = p + "\\n\\n" + bt + "javascript\\n" + code + "\\n" + bt;
                 addLog(state.currentWorker, type, "Requesting Gemini for " + type);
@@ -854,19 +886,19 @@ app.get('/', (c) => {
                 const loadingId = 'loading-' + Date.now();
                 appendMessage('ai', 'Gemini is thinking...', loadingId);
 
-                // Construct full context prompt for "control"
-                const context = "You are GENERAL WORKER AI. You have access to Cloudflare account details.\\n" +
-                              "Account: " + (state.account ? state.account.name : 'Unknown') + "\\n" +
-                              "Workers: " + state.workers.map(w => w.id).join(', ') + "\\n" +
-                              "DNS: " + state.dns.map(d => d.name).join(', ') + "\\n" +
-                              (state.currentWorker ? "Current selected worker: " + state.currentWorker : "") + "\\n\\n" +
-                              "User prompt: " + promptRaw;
+                const sysPrompt = "You are GENERAL WORKER AI. You assist with Cloudflare Workers. You MUST provide functional, complete worker scripts.\\n" +
+                                 "IMPORTANT: When asked to edit, generate, or review, strive to create a Web Page Interface (HTML/JS/CSS) within the worker using Hono or standard Responses so the user can interact with the worker via browser.\\n" +
+                                 "Account: " + (state.account ? state.account.name : 'Unknown') + "\\n" +
+                                 "Workers: " + state.workers.map(w => w.id).join(', ') + "\\n" +
+                                 "DNS: " + state.dns.map(d => d.name).join(', ') + "\\n" +
+                                 (state.currentWorker ? "Target Worker: " + state.currentWorker + "\\nTarget Worker Source Code:\\n" + state.currentCode : "") + "\\n\\n" +
+                                 "Instructions: " + promptRaw;
 
                 try {
                     const res = await fetch("/api/ai/chat", {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'X-AI-Key': state.aiKey },
-                        body: JSON.stringify({ prompt: context })
+                        body: JSON.stringify({ prompt: sysPrompt })
                     });
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.error);
@@ -877,6 +909,7 @@ app.get('/', (c) => {
                     let finalCode = "";
                     if (text.includes(bt + "javascript")) finalCode = text.split(bt + "javascript")[1].split(bt)[0].trim();
                     else if (text.includes(bt + "js")) finalCode = text.split(bt + "js")[1].split(bt)[0].trim();
+                    else if (text.includes(bt + "html")) finalCode = text.split(bt + "html")[1].split(bt)[0].trim();
 
                     if (finalCode) {
                         state.lastGeneratedCode = finalCode;
