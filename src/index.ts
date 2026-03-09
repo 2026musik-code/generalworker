@@ -771,41 +771,56 @@ app.get('/', (c) => {
                 state.currentWorker = name;
                 document.getElementById('editor-worker-name').textContent = name;
                 const codeArea = document.getElementById('worker-code');
-                codeArea.value = 'Fetching code...';
+                codeArea.value = 'Syncing...';
                 toggleEditor();
                 toggleSidebar();
                 loadLogs(name);
                 try {
+                    // STEP 1: Cek R2 dulu (Metode Utama kita sekarang)
+                    addSystemLog("Mencari kode di R2 untuk " + name + "...");
+                    const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
+                    if (r2res.ok) {
+                        const code = await r2res.text();
+                        codeArea.value = code;
+                        state.currentCode = code;
+                        addSystemLog("Sukses: Kode dimuat dari R2.");
+                        return;
+                    }
+
+                    // STEP 2: Jika tidak ada di R2, coba ambil dari Cloudflare
+                    addSystemLog("Kode tidak ada di R2. Mencoba fetch dari Cloudflare...");
                     const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
                     if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
+
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", { headers: headers });
                     if (res.ok) {
                         const code = await res.text();
                         codeArea.value = code;
                         state.currentCode = code;
+                        // Auto-save ke R2 agar kedepannya tidak kena limit GET lagi
+                        fetch("/api/cloudflare/workers/" + name + "/storage", { method: 'POST', body: code });
+                        addSystemLog("Sukses: Kode diambil dari Cloudflare & dicadangkan ke R2.");
                     } else {
                         const data = await res.json().catch(() => ({}));
                         const cfError = data.errors?.[0];
-                        let msg = "Gagal mengambil kode dari Cloudflare.";
+
                         if (cfError?.code === 10000) {
-                            msg = "Cloudflare melarang akses GET menggunakan API Token Scoped.\\n\\nSOLUSI: Buka SETTINGS, ganti API Token dengan 'Global API Key', dan isi Cloudflare Email.";
-                        } else if (cfError?.message) {
-                            msg = "CF Error " + cfError.code + ": " + cfError.message;
-                        }
-
-                        addSystemLog("Cloudflare Fetch Failed: " + (cfError?.message || res.status), true);
-
-                        // Try R2 as fallback
-                        const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
-                        if (r2res.ok) {
-                            const code = await r2res.text();
-                            codeArea.value = code;
-                            state.currentCode = code;
-                            addSystemLog("Fallback: Kode diambil dari R2.");
+                            addSystemLog("Cloudflare Error 10000: GET restricted.", true);
+                            const dashUrl = "https://dash.cloudflare.com/" + state.cfAccountId + "/workers/services/view/" + name + "/production/edit";
+                            const importMsg = "// [CLOUDFLARE SECURITY RESTRICTION - ERROR 10000]\\n" +
+                                            "// Cloudflare melarang download kode menggunakan Scoped API Token.\\n\\n" +
+                                            "// METODE IMPORT CEPAT (Hanya sekali):\\n" +
+                                            "// 1. Buka Dashboard: " + dashUrl + "\\n" +
+                                            "// 2. Copy semua kode worker anda di sana.\\n" +
+                                            "// 3. PASTE kodenya di sini (Hapus instruksi ini).\\n" +
+                                            "// 4. Klik tombol 'SAVE R2' di bawah.\\n\\n" +
+                                            "// Setelah disimpan, Gemini akan punya kendali penuh untuk membuat Halaman Web untuk anda.";
+                            codeArea.value = importMsg;
+                            state.currentCode = importMsg;
                         } else {
-                            const fallbackMsg = "// " + msg + "\\n\\n// Kode tidak ditemukan di R2.\\n// Anda bisa PASTE kode worker di sini secara manual untuk dianalisa AI.";
-                            codeArea.value = fallbackMsg;
-                            state.currentCode = fallbackMsg;
+                            const errText = "// Gagal mengambil kode.\\n// Error: " + (cfError?.message || res.status) + "\\n// Silakan paste kode manual atau ganti API Key.";
+                            codeArea.value = errText;
+                            state.currentCode = errText;
                         }
                     }
                 } catch (e) { codeArea.value = '// Error: ' + e.message; }
@@ -814,12 +829,20 @@ app.get('/', (c) => {
             async function saveToR2() {
                 const name = state.currentWorker;
                 const code = document.getElementById('worker-code').value;
+                if (code.includes('[CLOUDFLARE SECURITY RESTRICTION]') || code.startsWith('// Gagal')) {
+                    alert("Kode tidak valid untuk disimpan!");
+                    return;
+                }
                 try {
                     const res = await fetch("/api/cloudflare/workers/" + name + "/storage", {
                         method: 'POST',
                         body: code
                     });
-                    if (res.ok) alert('Saved to R2 successfully');
+                    if (res.ok) {
+                        state.currentCode = code;
+                        addSystemLog("Kode " + name + " berhasil disimpan ke R2.");
+                        alert('Saved to R2 successfully');
+                    }
                 } catch (e) { alert('Error: ' + e.message); }
             }
 
@@ -869,6 +892,10 @@ app.get('/', (c) => {
 
             async function workerAction(type) {
                 const code = document.getElementById('worker-code').value;
+                if (code.includes('[CLOUDFLARE SECURITY RESTRICTION]') || code.startsWith('// Gagal')) {
+                    alert("Silakan paste kode worker anda terlebih dahulu!");
+                    return;
+                }
                 state.currentCode = code;
                 toggleEditor();
                 const bt = String.fromCharCode(96, 96, 96);
@@ -883,6 +910,14 @@ app.get('/', (c) => {
             }
 
             async function sendMessage(overridePrompt = null, displayPrompt = null) {
+                // Always sync current editor code before sending message if a worker is open
+                if (state.currentWorker) {
+                    const editorValue = document.getElementById('worker-code').value;
+                    if (editorValue && !editorValue.includes('[CLOUDFLARE SECURITY RESTRICTION]') && !editorValue.startsWith('// Gagal')) {
+                        state.currentCode = editorValue;
+                    }
+                }
+
                 const input = document.getElementById('chat-input');
                 const promptRaw = overridePrompt || input.value.trim();
                 const displayStr = displayPrompt || promptRaw;
@@ -893,12 +928,14 @@ app.get('/', (c) => {
                 const loadingId = 'loading-' + Date.now();
                 appendMessage('ai', 'Gemini is thinking...', loadingId);
 
+                const hasNoCode = !state.currentCode || state.currentCode.includes('[CLOUDFLARE SECURITY RESTRICTION]') || state.currentCode.startsWith('// Gagal');
                 const sysPrompt = "You are GENERAL WORKER AI. You assist with Cloudflare Workers. You MUST provide functional, complete worker scripts.\\n" +
                                  "IMPORTANT: When asked to edit, generate, or review, strive to create a Web Page Interface (HTML/JS/CSS) within the worker using Hono or standard Responses so the user can interact with the worker via browser.\\n" +
                                  "Account: " + (state.account ? state.account.name : 'Unknown') + "\\n" +
                                  "Workers: " + state.workers.map(w => w.id).join(', ') + "\\n" +
                                  "DNS: " + state.dns.map(d => d.name).join(', ') + "\\n" +
-                                 (state.currentWorker ? "Target Worker: " + state.currentWorker + "\\nTarget Worker Source Code:\\n" + state.currentCode : "") + "\\n\\n" +
+                                 (state.currentWorker ? "Target Worker: " + state.currentWorker + "\\nTarget Worker Source Code Status: " + (hasNoCode ? "NOT LOADED (User needs to paste code)" : "LOADED") + "\\n" + (hasNoCode ? "" : "Source Code:\\n" + state.currentCode) : "") + "\\n\\n" +
+                                 (hasNoCode ? "NOTE: If you need to see the code to fulfill the request, politely ask the user to PASTE the code into the editor first.\\n" : "") +
                                  "Instructions: " + promptRaw;
 
                 try {
