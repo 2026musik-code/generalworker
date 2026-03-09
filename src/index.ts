@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { html } from 'hono/html'
+import { GoogleGenAI } from "@google/genai"
 
 type Bindings = {
   R2: R2Bucket;
@@ -131,43 +132,23 @@ app.get('/api/cloudflare/dns', async (c) => {
   return c.json(await response.json())
 })
 
-app.get('/api/ai/chat', async (c) => {
-  const prompt = c.req.query('prompt')
-  const apikey = c.req.header('X-AI-Key') || 'ak_37f62be0573d'
+app.post('/api/ai/chat', async (c) => {
+  const { prompt } = await c.req.json()
+  const apiKey = c.req.header('X-AI-Key')
+
+  if (!apiKey) return c.json({ error: 'Missing Gemini API Key' }, 401)
   if (!prompt) return c.json({ error: 'Missing prompt' }, 400)
 
-  const baseUrl = 'https://api-v3.ahem7553.workers.dev/api/gateway/copilot'
-
   try {
-    // Try POST first for reliability with large payloads
-    let response = await fetch(baseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apikey, prompt })
+    const ai = new GoogleGenAI({ apiKey })
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
     })
 
-    if (response.status === 404 || response.status === 405) {
-        // Fallback to GET if POST is not supported
-        const url = new URL(baseUrl)
-        url.searchParams.append('apikey', apikey)
-        url.searchParams.append('prompt', prompt)
-        response = await fetch(url.toString())
-    }
-
-    const text = await response.text()
-    if (!response.ok) {
-        return c.json({ error: "API Error " + response.status + ": " + text }, response.status as any)
-    }
-
-    try {
-        const data = JSON.parse(text)
-        const aiResponse = data.message || data.response || data.result || text
-        return c.json({ response: aiResponse })
-    } catch (e) {
-        return c.json({ response: text })
-    }
+    return c.json({ response: response.text })
   } catch (e: any) {
-    return c.json({ error: e.message || 'Internal Server Error' }, 500)
+    return c.json({ error: e.message || 'Gemini API Error' }, 500)
   }
 })
 
@@ -198,7 +179,7 @@ app.get('/', (c) => {
             <div class="w-full max-w-md glass rounded-3xl p-8 shadow-2xl">
                 <div class="text-center mb-8">
                     <h1 class="text-4xl font-black gradient-text mb-2 tracking-tight">GENERAL WORKER</h1>
-                    <p class="text-slate-400 text-sm">Cloudflare Management & AI Assistant</p>
+                    <p class="text-slate-400 text-sm">Cloudflare Management & Gemini AI</p>
                 </div>
 
                 <div class="space-y-4">
@@ -215,8 +196,8 @@ app.get('/', (c) => {
                         <input id="cf-email" type="email" placeholder="Required for Global API Key" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
                     <div class="space-y-2">
-                        <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">AI API Key (Optional)</label>
-                        <input id="ai-key" type="password" placeholder="Default used if empty" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
+                        <label class="text-xs font-semibold uppercase tracking-wider text-slate-500 ml-1">Gemini API Key</label>
+                        <input id="ai-key" type="password" placeholder="Enter Gemini Key" class="w-full bg-slate-800/50 border border-slate-700 rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-sm">
                     </div>
 
                     <button onclick="handleLogin()" class="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-500/20 transition-all transform active:scale-95 mt-4">
@@ -280,7 +261,6 @@ app.get('/', (c) => {
                         </div>
                     </div>
 
-                    <!-- System Log Section -->
                     <div class="border-t border-slate-800 flex flex-col transition-all duration-300 overflow-hidden" id="error-log-section" style="height: 40px;">
                         <button onclick="toggleErrorLog()" class="h-10 px-6 flex items-center justify-between hover:bg-slate-800/50 transition-colors w-full">
                             <div class="flex items-center gap-2">
@@ -305,7 +285,6 @@ app.get('/', (c) => {
                 <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 hidden transition-opacity duration-300"></div>
 
                 <section class="flex-grow flex flex-col bg-slate-950/30 relative overflow-hidden">
-                    <!-- Logs Section (Worker Specific Activity) -->
                     <div id="logs-container" class="hidden absolute top-0 left-0 right-0 h-48 glass z-20 border-b border-slate-800 flex flex-col transition-all duration-300 transform -translate-y-full">
                         <div class="px-4 py-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
                             <span class="text-[10px] font-black uppercase tracking-widest text-slate-400">Log Aktivasi AI</span>
@@ -319,7 +298,7 @@ app.get('/', (c) => {
                     <div id="chat-messages" class="flex-grow overflow-y-auto p-6 space-y-6 scroll-smooth">
                         <div class="flex justify-start">
                             <div class="max-w-[85%] glass rounded-2xl rounded-tl-none p-4 text-sm leading-relaxed shadow-lg">
-                                Hello! I'm your General Worker AI assistant. How can I help you today?
+                                Hello! I'm Gemini, your General Worker assistant. I have full context of your Cloudflare account. How can I help you?
                             </div>
                         </div>
                     </div>
@@ -341,7 +320,6 @@ app.get('/', (c) => {
             </main>
         </div>
 
-        <!-- Worker Editor Modal -->
         <div id="modal-editor" class="hidden fixed inset-0 bg-black/80 backdrop-blur-lg z-50 flex flex-col p-4">
             <div class="flex-grow flex flex-col glass rounded-3xl overflow-hidden shadow-2xl max-w-4xl mx-auto w-full">
                 <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-slate-900/50">
@@ -381,7 +359,6 @@ app.get('/', (c) => {
             </div>
         </div>
 
-        <!-- Preview Modal -->
         <div id="modal-preview" class="hidden fixed inset-0 bg-black/80 backdrop-blur-xl z-50 flex flex-col p-4">
             <div class="flex-grow flex flex-col glass rounded-3xl overflow-hidden shadow-2xl max-w-4xl mx-auto w-full">
                 <div class="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-slate-900/50">
@@ -419,9 +396,8 @@ app.get('/', (c) => {
             </div>
         </div>
 
-        <!-- Settings Modal -->
         <div id="modal-settings" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-6">
-            <div class="w-full max-w-sm glass rounded-3xl p-8 shadow-2xl">
+            <div class="w-full max-sm glass rounded-3xl p-8 shadow-2xl">
                 <div class="flex justify-between items-center mb-8">
                     <h2 class="text-xl font-bold">Settings</h2>
                     <button onclick="toggleSettings()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
@@ -440,7 +416,7 @@ app.get('/', (c) => {
                         <input id="set-cf-email" type="email" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
                     <div class="space-y-1">
-                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">AI Key</label>
+                        <label class="text-[10px] font-bold uppercase text-slate-500 tracking-wider">Gemini AI Key</label>
                         <input id="set-ai-key" type="password" class="w-full bg-slate-800/80 border border-slate-700 rounded-2xl px-4 py-3 text-sm">
                     </div>
                     <button onclick="saveSettings()" class="w-full bg-blue-600 py-4 rounded-2xl font-bold mt-4 shadow-lg shadow-blue-500/20 active:scale-95 transition-all">Save Changes</button>
@@ -684,8 +660,8 @@ app.get('/', (c) => {
                 state.cfEmail = document.getElementById('cf-email').value;
                 state.aiKey = document.getElementById('ai-key').value;
 
-                if (!state.cfAccountId || !state.cfToken) {
-                    alert('Please fill Cloudflare fields');
+                if (!state.cfAccountId || !state.cfToken || !state.aiKey) {
+                    alert('Please fill all fields, including Gemini Key');
                     return;
                 }
 
@@ -729,10 +705,7 @@ app.get('/', (c) => {
                     } else {
                         const err = accData.errors?.[0] || {};
                         let msg = err.message || 'Gagal memuat akun';
-                        if (err.code === 10000 && !state.cfEmail) {
-                            msg = "API Token ditolak (GET). Gunakan 'Global API Key' + Email di Settings.";
-                        }
-                        addSystemLog("CF Error " + (err.code || '') + ": " + msg, true);
+                        addSystemLog("CF Error: " + msg, true);
                     }
                 } catch (e) {
                     addSystemLog("Error Cloudflare: " + e.message, true);
@@ -784,7 +757,6 @@ app.get('/', (c) => {
             }
 
             async function openWorker(name) {
-                addSystemLog("Membuka worker: " + name);
                 state.currentWorker = name;
                 document.getElementById('editor-worker-name').textContent = name;
                 const codeArea = document.getElementById('worker-code');
@@ -796,13 +768,8 @@ app.get('/', (c) => {
                     const headers = { 'X-CF-Account-ID': state.cfAccountId, 'X-CF-Token': state.cfToken };
                     if (state.cfEmail) headers['X-CF-Email'] = state.cfEmail;
                     const res = await fetch("/api/cloudflare/workers/" + name + "/content", { headers: headers });
-                    if (res.ok) {
-                        codeArea.value = await res.text();
-                    } else {
-                        codeArea.value = '// Error fetching code from Cloudflare. Trying R2...';
-                        const r2res = await fetch("/api/cloudflare/workers/" + name + "/storage");
-                        if (r2res.ok) codeArea.value = await r2res.text();
-                    }
+                    if (res.ok) codeArea.value = await res.text();
+                    else codeArea.value = '// Error fetching code.';
                 } catch (e) { codeArea.value = '// Error: ' + e.message; }
             }
 
@@ -845,11 +812,10 @@ app.get('/', (c) => {
                     logs.reverse().forEach(log => {
                         const item = document.createElement('div');
                         item.className = 'border-l-2 border-blue-500/30 pl-2 py-1';
-                        const time = new Date(log.timestamp).toLocaleTimeString();
-                        item.innerHTML = "<div class='text-slate-500 text-[8px]'>" + time + " - " + log.action.toUpperCase() + "</div><div class='text-slate-300'>" + (log.summary || 'No summary') + "</div>";
+                        item.innerHTML = "<div class='text-slate-500 text-[8px]'>" + new Date(log.timestamp).toLocaleTimeString() + " - " + log.action.toUpperCase() + "</div><div class='text-slate-300'>" + log.summary + "</div>";
                         list.appendChild(item);
                     });
-                } catch (e) { list.innerHTML = '<div class="text-red-400">Gagal memuat log.</div>'; }
+                } catch (e) { list.innerHTML = '<div class="text-red-400">Error loading logs.</div>'; }
             }
 
             async function addLog(name, action, summary) {
@@ -865,73 +831,62 @@ app.get('/', (c) => {
 
             async function workerAction(type) {
                 const code = document.getElementById('worker-code').value;
-                try {
-                    await fetch("/api/cloudflare/workers/" + state.currentWorker + "/storage", {
-                        method: 'POST',
-                        body: code
-                    });
-                } catch (e) {}
-
                 toggleEditor();
                 const bt = String.fromCharCode(96, 96, 96);
-                const nl = String.fromCharCode(10);
-                let p = ""; let icon = ""; let summary = "";
-                if (type === 'analyze') {
-                    p = "Analisa kode worker berikut. Berikan penjelasan masalah yang ditemukan and berikan saran perbaikan. Berikan kode lengkap yang sudah diperbaiki di dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
-                    icon = "🔍"; summary = "Menganalisa kode.";
-                } else if (type === 'review') {
-                    p = "Review kode worker berikut secara mendalam. Cari bug, celah keamanan, atau inefisiensi. Jelaskan masalahnya secara detail, lalu berikan kode final yang sudah dioptimalkan dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
-                    icon = "🛡️"; summary = "Melakukan review.";
-                } else if (type === 'generate') {
-                    p = "Kembangkan fitur baru atau perbaiki kode worker berikut sesuai standar terbaik. Jika ini fitur baru, sarankan nama worker baru seperti 'workername_v2'. Jelaskan apa yang diubah dan mengapa, lalu berikan kode lengkapnya dalam blok kode markdown (" + bt + "javascript ... " + bt + "):";
-                    icon = "✨"; summary = "Mengembangkan fitur.";
-                }
-                const realPrompt = p + nl + nl + bt + "javascript" + nl + code + nl + bt;
-                const displayPrompt = icon + " " + type.toUpperCase() + ": " + state.currentWorker;
-                addLog(state.currentWorker, type, summary);
-                sendMessage(realPrompt, displayPrompt);
+                let p = "";
+                if (type === 'analyze') p = "Analyze this worker code. Suggest fixes and provide improved code in " + bt + "javascript block:";
+                else if (type === 'review') p = "Review this worker code for bugs/security. Provide optimized code in " + bt + "javascript block:";
+                else if (type === 'generate') p = "Develop new features for this worker. Provide complete code in " + bt + "javascript block:";
+
+                const fullPrompt = p + "\\n\\n" + bt + "javascript\\n" + code + "\\n" + bt;
+                addLog(state.currentWorker, type, "Requesting Gemini for " + type);
+                sendMessage(fullPrompt, "Gemini, please " + type + " worker: " + state.currentWorker);
             }
 
             async function sendMessage(overridePrompt = null, displayPrompt = null) {
                 const input = document.getElementById('chat-input');
-                const promptStr = overridePrompt || input.value.trim();
-                const displayStr = displayPrompt || promptStr;
-                if (!promptStr) return;
+                const promptRaw = overridePrompt || input.value.trim();
+                const displayStr = displayPrompt || promptRaw;
+                if (!promptRaw) return;
                 if (!overridePrompt) input.value = '';
+
                 appendMessage('user', displayStr);
                 const loadingId = 'loading-' + Date.now();
-                appendMessage('ai', 'Thinking...', loadingId);
-                addSystemLog("Menghubungkan ke AI...");
+                appendMessage('ai', 'Gemini is thinking...', loadingId);
+
+                // Construct full context prompt for "control"
+                const context = "You are GENERAL WORKER AI. You have access to Cloudflare account details.\\n" +
+                              "Account: " + (state.account ? state.account.name : 'Unknown') + "\\n" +
+                              "Workers: " + state.workers.map(w => w.id).join(', ') + "\\n" +
+                              "DNS: " + state.dns.map(d => d.name).join(', ') + "\\n" +
+                              (state.currentWorker ? "Current selected worker: " + state.currentWorker : "") + "\\n\\n" +
+                              "User prompt: " + promptRaw;
+
                 try {
-                    const headers = {};
-                    if (state.aiKey) headers['X-AI-Key'] = state.aiKey;
-                    const res = await fetch("/api/ai/chat?prompt=" + encodeURIComponent(promptStr), { headers: headers });
-                    const data = await res.json().catch(() => ({ error: 'Gagal memproses data AI.' }));
-                    if (!res.ok) {
-                        updateAIStatus(false);
-                        addSystemLog("AI error: " + (data.error || res.status), true);
-                        throw new Error(data.error || "Gagal mendapatkan respon dari AI.");
-                    }
+                    const res = await fetch("/api/ai/chat", {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-AI-Key': state.aiKey },
+                        body: JSON.stringify({ prompt: context })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error);
+
                     updateAIStatus(true);
-                    addSystemLog("AI terhubung.");
-                    const responseText = data.response || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
+                    const text = data.response;
                     const bt = String.fromCharCode(96, 96, 96);
-                    const codeMatch = responseText.split(bt + "javascript").pop().split(bt)[0];
-                    const codeMatch2 = responseText.split(bt + "js").pop().split(bt)[0];
-                    const codeMatch3 = responseText.split(bt).length > 2 ? responseText.split(bt)[1] : null;
                     let finalCode = "";
-                    if (responseText.includes(bt + "javascript")) finalCode = codeMatch.trim();
-                    else if (responseText.includes(bt + "js")) finalCode = codeMatch2.trim();
-                    else if (codeMatch3) finalCode = codeMatch3.trim();
+                    if (text.includes(bt + "javascript")) finalCode = text.split(bt + "javascript")[1].split(bt)[0].trim();
+                    else if (text.includes(bt + "js")) finalCode = text.split(bt + "js")[1].split(bt)[0].trim();
 
                     if (finalCode) {
                         state.lastGeneratedCode = finalCode;
-                        updateMessage(loadingId, responseText, true);
+                        updateMessage(loadingId, text, true);
                     } else {
-                        updateMessage(loadingId, responseText);
+                        updateMessage(loadingId, text);
                     }
                 } catch (e) {
-                    updateMessage(loadingId, 'Kesalahan: ' + (e.message || 'Gagal mendapatkan respon dari AI.'));
+                    updateAIStatus(false);
+                    updateMessage(loadingId, 'Gemini Error: ' + e.message);
                 }
             }
 
@@ -940,10 +895,8 @@ app.get('/', (c) => {
                 const div = document.createElement('div');
                 div.className = "flex flex-col " + (role === 'user' ? 'items-end' : 'items-start');
                 if (id) div.id = id;
-                let htmlStr = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed whitespace-pre-wrap shadow-lg shadow-black/20'>" + text + "</div>";
-                if (hasCode) {
-                    htmlStr += "<button onclick='togglePreview()' class='mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 transition-all flex items-center gap-2'><i class='fa-solid fa-eye'></i> PERTINJAU PERBAIKAN</button>";
-                }
+                let htmlStr = "<div class='max-w-[85%] " + (role === 'user' ? 'bg-blue-600 rounded-tr-none' : 'glass rounded-tl-none') + " rounded-2xl p-4 text-sm leading-relaxed whitespace-pre-wrap shadow-lg'>" + text + "</div>";
+                if (hasCode) htmlStr += "<button onclick='togglePreview()' class='mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 flex items-center gap-2'><i class='fa-solid fa-eye'></i> PERTINJAU PERBAIKAN</button>";
                 div.innerHTML = htmlStr;
                 container.appendChild(div);
                 container.scrollTop = container.scrollHeight;
@@ -956,20 +909,16 @@ app.get('/', (c) => {
                     if (hasCode && !div.querySelector('button')) {
                         const btn = document.createElement('button');
                         btn.onclick = () => togglePreview();
-                        btn.className = 'mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 transition-all flex items-center gap-2';
+                        btn.className = 'mt-2 px-4 py-2 bg-blue-600/20 border border-blue-500/30 text-blue-400 rounded-xl text-xs font-bold hover:bg-blue-600/30 flex items-center gap-2';
                         btn.innerHTML = "<i class='fa-solid fa-eye'></i> PERTINJAU PERBAIKAN";
                         div.appendChild(btn);
                     }
-                    const container = document.getElementById('chat-messages');
-                    container.scrollTop = container.scrollHeight;
+                    document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
                 }
             }
 
-            document.getElementById('chat-input').addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') sendMessage();
-            });
+            document.getElementById('chat-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
 
-            // Export to window
             window.handleLogin = handleLogin;
             window.toggleSidebar = toggleSidebar;
             window.toggleSettings = toggleSettings;
